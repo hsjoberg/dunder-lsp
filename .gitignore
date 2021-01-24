@@ -1,0 +1,6 @@
+node_modules
+setup-ln-service.ts
+database.db
+dist
+.vs-code
+yarn-error.log
