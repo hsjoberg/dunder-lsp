@@ -149,7 +149,7 @@ const OnDemandChannel = function (lightning: Client, router: Client) {
             status,
             approxFeeSat: estimateFeeResponse.feeSat.toNumber(),
             // minFundingSat:
-            peer: `${servicePubKey}@192.168.1.113:9734`,
+            peer: `${servicePubKey}@${LND_NODE}`,
           };
           connection.socket.send(JSON.stringify(response));
           break;
