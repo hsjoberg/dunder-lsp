@@ -2,17 +2,18 @@ import fastify from "fastify";
 import fastifyWebsocket from "fastify-websocket";
 import fastifyCors from "fastify-cors";
 import Long from "long";
+import config from "config";
 
 import { getInfo, estimateFee } from "./utils/lnd-api";
 import { getGrpcClients } from "./utils/grpc";
 
-const HOST = process.env.DUNDER_HOST;
-if (!HOST) {
-  console.error("Dunder has to be started with DUNDER_HOST environment variable");
-  process.exit(1);
+if (config.util.getConfigSources().length === 0) {
+  throw new Error("Could not find any config sources. Did you forget to create the config file?");
 }
-const DOMAIN = HOST.split(":")[0];
-const PORT = Number.parseInt(HOST.split(":")[1] ?? "8080");
+
+const host = config.get<string>("serverHost");
+const domain = host.split(":")[0];
+const port = Number.parseInt(host.split(":")[1] ?? "8080");
 
 const { lightning, router } = getGrpcClients();
 
@@ -34,7 +35,7 @@ server.get("/getInfo", async function () {
   return await getInfo(lightning);
 });
 
-server.listen(PORT, DOMAIN, (err, address) => {
+server.listen(port, domain, (err, address) => {
   if (err) {
     console.error(err);
     process.exit(1);

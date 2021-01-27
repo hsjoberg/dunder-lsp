@@ -3,6 +3,7 @@ import { Client } from "@grpc/grpc-js";
 import { lnrpc, routerrpc } from "./proto";
 import { createHash } from "crypto";
 import Long from "long";
+import config from "config";
 
 import { bytesToHexString, generateShortChannelId, hexToUint8Array } from "./utils/common";
 import {
@@ -15,11 +16,8 @@ import {
   listPeers,
 } from "./utils/lnd-api";
 
-const LND_NODE = process.env.LND_NODE as string;
-if (!LND_NODE) {
-  console.error("Dunder has to be started with LND_NODE environment variable");
-  process.exit(1);
-}
+const lndNode = config.get<string>("backendConfig.lndNode");
+
 const MSAT = 1000;
 
 type Pubkey = string;
@@ -104,7 +102,7 @@ const OnDemandChannel = async function (app, { lightning, router }) {
       status,
       approxFeeSat: estimateFeeResponse.feeSat.toNumber(),
       minimumPaymentSat: minimumPaymentSat.toNumber(),
-      peer: `${servicePubKey}@${LND_NODE}`,
+      peer: `${servicePubKey}@${lndNode}`,
     };
     return response;
   });

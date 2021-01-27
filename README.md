@@ -18,9 +18,11 @@ Dunder expects lnd dir to be in `<home>/.lnd`.
 
 The `master` branch always expects the latest version of lnd.
 
-1. Install and run lnd
-2. `yarn`
-3. `DUNDER_HOST=<ip:port> LND_NODE=<ip:port> yarn start`
+1. Run lnd, wallet must be unlocked for Dunder to operate correctly
+2. `git clone https://github.com/hsjoberg/dunder-lsp && cd dunder-lsp`
+3. Copy `config/default.json_TEMPLATE` to `config/default.json` and set up your configuration
+4. `yarn`
+5. `yarn start`
 
 # LICENSE
 

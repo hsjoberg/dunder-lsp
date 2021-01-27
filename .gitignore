@@ -4,3 +4,4 @@ database.db
 dist
 .vs-code
 yarn-error.log
+config/default.json
