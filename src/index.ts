@@ -1,15 +1,15 @@
+import config from "config";
+if (config.util.getConfigSources().length === 0) {
+  throw new Error("Could not find any config sources. Did you forget to create the config file?");
+}
 import fastify from "fastify";
 import fastifyWebsocket from "fastify-websocket";
 import fastifyCors from "fastify-cors";
 import Long from "long";
-import config from "config";
 
-import { getInfo, estimateFee } from "./utils/lnd-api";
-import { getGrpcClients } from "./utils/grpc";
-
-if (config.util.getConfigSources().length === 0) {
-  throw new Error("Could not find any config sources. Did you forget to create the config file?");
-}
+import "./db/db.js";
+import { getInfo, estimateFee } from "./utils/lnd-api.js";
+import { getGrpcClients } from "./utils/grpc.js";
 
 const host = config.get<string>("serverHost");
 const domain = host.split(":")[0];
@@ -21,7 +21,7 @@ const server = fastify();
 server.register(fastifyWebsocket, {});
 server.register(fastifyCors);
 
-server.register(require("./ondemand-channel"), {
+server.register(import("./ondemand-channel.js"), {
   prefix: "/ondemand-channel",
   lightning,
   router,

@@ -1,11 +1,11 @@
 {
   "name": "dunder-lsp",
+  "type": "module",
   "scripts": {
-    "gen-protos": "pbjs -t static-module -w commonjs -o src/proto.js proto/rpc.proto proto/router.proto && yarn pbts -o src/proto.d.ts src/proto.js",
     "build": "tsc -p tsconfig.json",
-    "start": "yarn build && node dist/index.js",
+    "start": "yarn build && sed -i '' 's/import \\* as $protobuf from \"protobufjs\\/minimal\"/import $protobuf from \"protobufjs\\/minimal.js\"/g' dist/proto.js && node --harmony-top-level-await dist/index.js",
     "watch": "concurrently \"tsc -p tsconfig.json -w\" \"nodemon -w dist dist/index.js\"",
-    "gen-proto": "  pbjs --force-long -t static-module -w commonjs -o src/proto.js proto/rpc.proto proto/router.proto && pbts -o src/proto.d.ts src/proto.js"
+    "proto": "pbjs --force-long -t static-module -w es6 --es6 -o src/proto.js proto/rpc.proto proto/router.proto && pbts -o src/proto.d.ts src/proto.js"
   },
   "version": "1.0.0",
   "main": "index.js",
@@ -24,6 +24,8 @@
     "grpc": "1.24.4",
     "nodemon": "^2.0.7",
     "protobufjs": "6.10.2",
+    "sqlite": "^4.0.19",
+    "sqlite3": "^5.0.1",
     "typescript": "4.1.3"
   },
   "devDependencies": {

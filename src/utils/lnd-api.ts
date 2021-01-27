@@ -1,9 +1,9 @@
 import { Client, Metadata } from "@grpc/grpc-js";
 import Long from "long";
 
-import { hexToUint8Array, stringToUint8Array } from "./common";
-import { lnrpc, routerrpc } from "../proto";
-import { grpcMakeUnaryRequest } from "./grpc";
+import { hexToUint8Array, stringToUint8Array } from "./common.js";
+import { lnrpc, routerrpc } from "../proto.js";
+import { grpcMakeUnaryRequest } from "./grpc.js";
 
 export async function getInfo(lightning: Client) {
   const getInfoRequest = lnrpc.GetInfoRequest.encode({}).finish();
@@ -59,6 +59,30 @@ export async function listPeers(lightning: Client) {
   return response;
 }
 
+export async function openChannelSync(
+  lightning: Client,
+  pubkey: string,
+  localFundingAmount: Long,
+  pushSat: Long,
+  privateChannel: boolean,
+) {
+  const openChannelSyncRequest = lnrpc.OpenChannelRequest.encode({
+    nodePubkey: hexToUint8Array(pubkey),
+    localFundingAmount,
+    pushSat,
+    targetConf: 1,
+    minConfs: 1,
+    private: privateChannel,
+  }).finish();
+
+  return await grpcMakeUnaryRequest<lnrpc.ChannelPoint>(
+    lightning,
+    "lnrpc.Lightning/OpenChannelSync",
+    openChannelSyncRequest,
+    lnrpc.ChannelPoint.decode,
+  );
+}
+
 export function htlcInterceptor(router: Client) {
   return router.makeBidiStreamRequest(
     "/routerrpc.Router/HtlcInterceptor",
@@ -81,25 +105,14 @@ export function subscribeHtlcEvents(router: Client) {
   );
 }
 
-export async function openChannelSync(
-  lightning: Client,
-  pubkey: string,
-  localFundingAmount: Long,
-  pushSat: Long,
-  privateChannel: boolean,
-) {
-  const openChannelSyncRequest = lnrpc.OpenChannelRequest.encode({
-    nodePubkey: hexToUint8Array(pubkey),
-    localFundingAmount,
-    pushSat,
-    targetConf: 1,
-    private: privateChannel,
-  }).finish();
-
-  return await grpcMakeUnaryRequest<lnrpc.ChannelPoint>(
-    lightning,
-    "lnrpc.Lightning/OpenChannelSync",
-    openChannelSyncRequest,
-    lnrpc.ChannelPoint.decode,
+export function subscribeChannelEvents(lightning: Client) {
+  const request = lnrpc.ChannelEventSubscription.encode({}).finish();
+  return lightning.makeServerStreamRequest(
+    "/routerrpc.Lightning/SubscribeChannelEvents",
+    (arg: any) => arg,
+    (arg) => arg,
+    request,
+    new Metadata(),
+    undefined,
   );
 }

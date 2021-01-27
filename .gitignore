@@ -1,7 +1,9 @@
 node_modules
-setup-ln-service.ts
-database.db
-dist
-.vs-code
+.vscode
 yarn-error.log
+
+dist
 config/default.json
+database.db
+src/proto.js
+src/proto.d.ts

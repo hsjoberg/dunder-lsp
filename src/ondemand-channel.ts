@@ -1,11 +1,11 @@
 import { FastifyPluginAsync } from "fastify";
 import { Client } from "@grpc/grpc-js";
-import { lnrpc, routerrpc } from "./proto";
 import { createHash } from "crypto";
 import Long from "long";
 import config from "config";
 
-import { bytesToHexString, generateShortChannelId, hexToUint8Array } from "./utils/common";
+import { bytesToHexString, generateShortChannelId, hexToUint8Array } from "./utils/common.js";
+import { lnrpc, routerrpc } from "./proto.js";
 import {
   estimateFee,
   getInfo,
@@ -14,26 +14,17 @@ import {
   verifyMessage,
   openChannelSync,
   listPeers,
-} from "./utils/lnd-api";
-
-const lndNode = config.get<string>("backendConfig.lndNode");
-
-const MSAT = 1000;
-
-type Pubkey = string;
-type ChannelId = Long;
-type UserState = "NOT_REGISTERED" | "REGISTERED" | "WAITING_FOR_SETTLEMENT";
-type User = Map<
-  Pubkey,
-  {
-    state: UserState;
-    channelId: ChannelId | null;
-    preimage: string | null; // hex
-    tmpOpenChannelAmountMsat: Long | null;
-    // TODO save what outgoing msat to expect?
-  }
->;
-const users: User = new Map();
+} from "./utils/lnd-api.js";
+import db from "./db/db.js";
+import {
+  ChannelRequestStatus,
+  createChannelRequest,
+  getActiveChannelRequestsByPubkey,
+  getChannelRequest,
+  updateChannelRequest,
+  updateChannelRequestByPubkey,
+} from "./db/request.js";
+import { MSAT } from "./utils/constants.js";
 
 export interface IErrorResponse {
   status: "ERROR";
@@ -68,13 +59,14 @@ export interface ICheckStatusRequest {
 }
 
 export interface ICheckStatusResponse {
-  state: UserState;
+  state: ChannelRequestStatus;
 }
 
 export interface IRegisterErrorResponse extends IErrorResponse {}
 export interface IUnknownRequestResponse extends IErrorResponse {}
 
 const OnDemandChannel = async function (app, { lightning, router }) {
+  const lndNode = config.get<string>("backendConfig.lndNode");
   // Start the HTLC interception
   //
   // interceptHtlc is used to intercept an incoming HTLC and either accept
@@ -131,7 +123,7 @@ const OnDemandChannel = async function (app, { lightning, router }) {
     }
 
     // Check if the requester is connected to our Lightning node
-    if (!checkPeerConnected(lightning, registerRequest.pubkey)) {
+    if (!(await checkPeerConnected(lightning, registerRequest.pubkey))) {
       reply.code(400);
       const error: IRegisterErrorResponse = {
         status: "ERROR",
@@ -140,19 +132,29 @@ const OnDemandChannel = async function (app, { lightning, router }) {
       return error;
     }
 
-    if (users.has(registerRequest.pubkey)) {
-      // reply.code(400);
+    try {
+      const activeChannelRequests = await getActiveChannelRequestsByPubkey(
+        db,
+        registerRequest.pubkey,
+      );
+      if (activeChannelRequests.length > 0) {
+        // Dunno
+      }
+    } catch (e) {
+      console.error(e);
     }
 
     const channelId = Long.fromValue(await generateShortChannelId());
-    console.log(channelId.toString());
-
-    users.set(registerRequest.pubkey, {
-      channelId,
+    await createChannelRequest(db, {
+      channelId: channelId.toString(),
+      pubkey: registerRequest.pubkey,
       preimage: registerRequest.preimage,
-      state: "REGISTERED",
-      tmpOpenChannelAmountMsat: null,
+      status: "REGISTERED",
+      expire: 0,
+      expectedAmountSat: 0,
+      actualSettledAmountSat: null,
     });
+
     const response: IRegisterOkResponse = {
       status: "OK",
       servicePubKey,
@@ -165,15 +167,14 @@ const OnDemandChannel = async function (app, { lightning, router }) {
   });
 
   app.post("/check-status", async (request, reply) => {
-    let state: UserState = "NOT_REGISTERED";
-    const registerRequest = JSON.parse(request.body as string) as ICheckStatusRequest;
+    const checkStatusRequest = JSON.parse(request.body as string) as ICheckStatusRequest;
 
     const verifyMessageResponse = await verifyMessage(
       lightning,
       "CHECKSTATUS",
-      registerRequest.signature,
+      checkStatusRequest.signature,
     );
-    if (registerRequest.pubkey !== verifyMessageResponse.pubkey) {
+    if (checkStatusRequest.pubkey !== verifyMessageResponse.pubkey) {
       reply.code(400);
       const error: IRegisterErrorResponse = {
         status: "ERROR",
@@ -181,19 +182,12 @@ const OnDemandChannel = async function (app, { lightning, router }) {
       };
       return error;
     }
-
-    if (users.has(registerRequest.pubkey)) {
-      state = users.get(registerRequest.pubkey)?.state ?? "NOT_REGISTERED";
-    }
+    const channelRequests = await getActiveChannelRequestsByPubkey(db, checkStatusRequest.pubkey);
 
     const response: ICheckStatusResponse = {
-      state,
-      // request: "CHECKSTATUS",
-      // preimage: socketUsers[i].preimage,
-      // channelId: socketUsers[i].channelId?.toString(10) ?? null,
-      // pubkey: socketUsers[i].pubkey,
-      // status: socketUsers[i].state,
+      state: channelRequests.length === 0 ? "NOT_REGISTERED" : channelRequests[0].status,
     };
+    return response;
   });
 } as FastifyPluginAsync<{ lightning: Client; router: Client }>;
 
@@ -203,15 +197,8 @@ const interceptHtlc = (lightning: Client, router: Client) => {
   stream.on("data", async (data) => {
     const request = routerrpc.ForwardHtlcInterceptRequest.decode(data);
 
-    // Attempt to find the user
-    const searchForUser = [...users].find(([_, user]) => {
-      if (!user.channelId) {
-        return;
-      }
-      return request.outgoingRequestedChanId.equals(user.channelId);
-    });
-
-    if (!searchForUser) {
+    const channelRequest = await getChannelRequest(db, request.outgoingRequestedChanId.toString());
+    if (!channelRequest) {
       console.log("SKIPPING INCOMING HTLC");
       stream.write(
         routerrpc.ForwardHtlcInterceptResponse.encode({
@@ -220,9 +207,7 @@ const interceptHtlc = (lightning: Client, router: Client) => {
         }).finish(),
       );
     } else {
-      const [userPubkey, user] = searchForUser;
-
-      if (user.state !== "REGISTERED") {
+      if (channelRequest.status !== "REGISTERED") {
         console.error("Error: Got unexpected incoming HTLC");
         stream.write(
           routerrpc.ForwardHtlcInterceptResponse.encode({
@@ -232,21 +217,13 @@ const interceptHtlc = (lightning: Client, router: Client) => {
         );
       } else {
         console.log("SETTLING INCOMING HTLC");
-
-        console.log(
-          "paymentHash",
-          bytesToHexString(request.paymentHash),
-          "===",
-          createHash("sha256")
-            .update(hexToUint8Array(user.preimage ?? ""))
-            .digest("hex"),
-        );
         if (
           bytesToHexString(request.paymentHash) !==
           createHash("sha256")
-            .update(hexToUint8Array(user.preimage ?? ""))
+            .update(hexToUint8Array(channelRequest.preimage ?? ""))
             .digest("hex")
         ) {
+          // TODO error handling
           console.error("Payment hash does not match");
           const settleResponse = routerrpc.ForwardHtlcInterceptResponse.encode({
             action: routerrpc.ResolveHoldForwardAction.FAIL,
@@ -268,6 +245,7 @@ const interceptHtlc = (lightning: Client, router: Client) => {
             throw new Error("Too high fee");
           }
         } catch (e) {
+          // TODO error handling
           console.error("estimateFee failed", e);
           const settleResponse = routerrpc.ForwardHtlcInterceptResponse.encode({
             action: routerrpc.ResolveHoldForwardAction.FAIL,
@@ -279,7 +257,8 @@ const interceptHtlc = (lightning: Client, router: Client) => {
         const estimatedFeeMsat = feeResult.feeSat.mul(MSAT);
 
         // Check if the requester is connected to our Lightning node
-        if (!checkPeerConnected(lightning, userPubkey)) {
+        if (!checkPeerConnected(lightning, channelRequest.pubkey)) {
+          // TODO error handling
           console.error("Wallet node not connected");
           const settleResponse = routerrpc.ForwardHtlcInterceptResponse.encode({
             action: routerrpc.ResolveHoldForwardAction.FAIL,
@@ -290,17 +269,17 @@ const interceptHtlc = (lightning: Client, router: Client) => {
         }
 
         // Signal to the HTLC subscription that we're waiting for a settlement
-        users.set(userPubkey, {
-          ...user,
-          state: "WAITING_FOR_SETTLEMENT",
-          tmpOpenChannelAmountMsat: request.outgoingAmountMsat.subtract(estimatedFeeMsat),
+        updateChannelRequestByPubkey(db, {
+          ...channelRequest,
+          status: "WAITING_FOR_SETTLEMENT",
+          actualSettledAmountSat: request.outgoingAmountMsat.subtract(estimatedFeeMsat).toNumber(),
         });
 
         // Send settlement action to bidi-stream
         const settleResponse = routerrpc.ForwardHtlcInterceptResponse.encode({
           action: routerrpc.ResolveHoldForwardAction.SETTLE,
           incomingCircuitKey: request.incomingCircuitKey,
-          preimage: hexToUint8Array(user.preimage!),
+          preimage: hexToUint8Array(channelRequest.preimage),
         }).finish();
         stream.write(settleResponse);
       }
@@ -328,21 +307,15 @@ const subscribeHtlc = (lightning: Client, router: Client) => {
       return;
     }
 
-    const searchForUser = [...users].find(([_, user]) => {
-      if (!user.channelId) {
-        return;
-      }
-      return htlcEvent.outgoingChannelId.equals(user.channelId);
-    });
-    if (searchForUser) {
-      const [userPubkey, user] = searchForUser;
-      if (user.state === "WAITING_FOR_SETTLEMENT") {
-        const tmpOpenChannelAmountMsat = user.tmpOpenChannelAmountMsat;
-        if (tmpOpenChannelAmountMsat === null) {
+    const channelRequest = await getChannelRequest(db, htlcEvent.outgoingChannelId.toString());
+    if (channelRequest) {
+      if (channelRequest.status === "WAITING_FOR_SETTLEMENT") {
+        if (channelRequest.actualSettledAmountSat === null) {
           console.error("ERROR: Got WAITING_FOR_SETTLEMENT when tmpOpenChannelAmountMsat is null");
           return;
         }
 
+        const tmpOpenChannelAmountMsat = Long.fromValue(channelRequest.actualSettledAmountSat);
         try {
           // Check whether we can still do this transaction
           const result = await estimateFee(lightning, tmpOpenChannelAmountMsat.multiply(2), 1);
@@ -360,27 +333,28 @@ const subscribeHtlc = (lightning: Client, router: Client) => {
 
         const result = await openChannelSync(
           lightning,
-          userPubkey,
+          channelRequest.pubkey,
           tmpOpenChannelAmountMsat.div(MSAT).mul(2),
           tmpOpenChannelAmountMsat.div(MSAT),
           true,
         );
 
-        users.delete(userPubkey);
+        updateChannelRequest(db, {
+          ...channelRequest,
+          status: "DONE",
+        });
       } else {
-        console.error("Got Settle HTLC on unexpected user state: " + user.state);
+        console.error("Got Settle HTLC on unexpected user status: " + channelRequest.status);
       }
-    } else {
     }
   });
 };
 
 export default OnDemandChannel;
 
-async function checkPeerConnected(lightning: Client, pubkey: Pubkey) {
+async function checkPeerConnected(lightning: Client, pubkey: string) {
   const listPeersResponse = await listPeers(lightning);
   const seekPeer = listPeersResponse.peers.find((peer) => {
-    console.log(`pubkey ${peer.pubKey} === ${pubkey}`);
     return peer.pubKey === pubkey;
   });
 
