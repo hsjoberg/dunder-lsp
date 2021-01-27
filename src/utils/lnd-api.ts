@@ -34,19 +34,28 @@ export async function estimateFee(lightning: Client, amount: Long, targetConf: n
   return response;
 }
 
-// TODO
-export async function verifyMessage(lightning: Client, signature: string) {
+export async function verifyMessage(lightning: Client, message: string, signature: string) {
   const verifyMessageRequest = lnrpc.VerifyMessageRequest.encode({
-    msg: stringToUint8Array("REGISTER"),
+    msg: stringToUint8Array(message),
     signature: signature,
   }).finish();
-  const response = await grpcMakeUnaryRequest(
+  const response = await grpcMakeUnaryRequest<lnrpc.VerifyMessageResponse>(
     lightning,
     "/lnrpc.Lightning/VerifyMessage",
     verifyMessageRequest,
     lnrpc.VerifyMessageResponse.decode,
   );
-  console.log(response);
+  return response;
+}
+
+export async function listPeers(lightning: Client) {
+  const listPeersRequest = lnrpc.ListPeersRequest.encode({}).finish();
+  const response = await grpcMakeUnaryRequest<lnrpc.ListPeersResponse>(
+    lightning,
+    "/lnrpc.Lightning/ListPeers",
+    listPeersRequest,
+    lnrpc.ListPeersResponse.decode,
+  );
   return response;
 }
 
@@ -77,16 +86,17 @@ export async function openChannelSync(
   pubkey: string,
   localFundingAmount: Long,
   pushSat: Long,
+  privateChannel: boolean,
 ) {
   const openChannelSyncRequest = lnrpc.OpenChannelRequest.encode({
     nodePubkey: hexToUint8Array(pubkey),
     localFundingAmount,
     pushSat,
     targetConf: 1,
-    private: false,
+    private: privateChannel,
   }).finish();
 
-  return await grpcMakeUnaryRequest(
+  return await grpcMakeUnaryRequest<lnrpc.ChannelPoint>(
     lightning,
     "lnrpc.Lightning/OpenChannelSync",
     openChannelSyncRequest,

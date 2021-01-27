@@ -2,7 +2,6 @@ import fastify from "fastify";
 import fastifyWebsocket from "fastify-websocket";
 import fastifyCors from "fastify-cors";
 import Long from "long";
-import OnDemandChannel from "./ondemand-channel";
 
 import { getInfo, estimateFee } from "./utils/lnd-api";
 import { getGrpcClients } from "./utils/grpc";
@@ -21,7 +20,11 @@ const server = fastify();
 server.register(fastifyWebsocket, {});
 server.register(fastifyCors);
 
-server.get("/ondemand-channel", { websocket: true }, OnDemandChannel(lightning, router));
+server.register(require("./ondemand-channel"), {
+  prefix: "/ondemand-channel",
+  lightning,
+  router,
+});
 
 server.get("/estimateFee", async function () {
   return await estimateFee(lightning, Long.fromValue(100000), 1);
