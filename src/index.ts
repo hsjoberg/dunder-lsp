@@ -21,7 +21,7 @@ const server = fastify();
 server.register(fastifyWebsocket, {});
 server.register(fastifyCors);
 
-server.register(import("./ondemand-channel.js"), {
+server.register(import("./services/ondemand-channel/index.js"), {
   prefix: "/ondemand-channel",
   lightning,
   router,

@@ -1,4 +1,4 @@
-import { randomBytes } from "crypto";
+import { createHash, randomBytes } from "crypto";
 
 export const hexToUint8Array = (hexString: string) => {
   return new Uint8Array(hexString.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16)));
@@ -29,3 +29,10 @@ export const generateShortChannelId = (): Promise<number> => {
     });
   });
 };
+
+export const timeout = (time: number) =>
+  new Promise((resolve) => setTimeout(() => resolve(void 0), time));
+
+export function sha256(bytes: Uint8Array) {
+  return createHash("sha256").update(bytes).digest("hex");
+}

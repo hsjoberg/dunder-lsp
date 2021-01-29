@@ -65,14 +65,16 @@ export async function openChannelSync(
   localFundingAmount: Long,
   pushSat: Long,
   privateChannel: boolean,
+  spendUnconfirmed: boolean,
 ) {
   const openChannelSyncRequest = lnrpc.OpenChannelRequest.encode({
     nodePubkey: hexToUint8Array(pubkey),
     localFundingAmount,
     pushSat,
     targetConf: 1,
-    minConfs: 1,
+    minConfs: 0,
     private: privateChannel,
+    spendUnconfirmed,
   }).finish();
 
   return await grpcMakeUnaryRequest<lnrpc.ChannelPoint>(

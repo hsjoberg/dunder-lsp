@@ -2,10 +2,10 @@
 # yarn lockfile v1
 
 
-"@grpc/grpc-js@1.2.4":
-  version "1.2.4"
-  resolved "https://registry.yarnpkg.com/@grpc/grpc-js/-/grpc-js-1.2.4.tgz#04f0bbefb2636296d17e821f3d52152fbe2f6989"
-  integrity sha512-z+EI20HYHLd3/uERtwOqP8Q4EPhGbz5RKUpiyo6xPWfR3pcjpf8sfNvY9XytDQ4xo1wNz7NqH1kh2UBonwzbfg==
+"@grpc/grpc-js@1.2.5":
+  version "1.2.5"
+  resolved "https://registry.yarnpkg.com/@grpc/grpc-js/-/grpc-js-1.2.5.tgz#d1ef9ae8b99c3b46bb6cc8c82be1aa80080b7300"
+  integrity sha512-CBCNwedw8McnEBq9jvoiJikws16WN0OiHFejQPovY71XkFWSiIqgvydYiDwpvIYDJmhPQ7qZNzW9BPndhXbx1Q==
   dependencies:
     "@types/node" "^12.12.47"
     google-auth-library "^6.1.1"
@@ -581,7 +581,7 @@ dashdash@^1.12.0:
   dependencies:
     assert-plus "^1.0.0"
 
-date-fns@^2.0.1:
+date-fns@^2.0.1, date-fns@^2.16.1:
   version "2.16.1"
   resolved "https://registry.yarnpkg.com/date-fns/-/date-fns-2.16.1.tgz#05775792c3f3331da812af253e1a935851d3834b"
   integrity sha512-sAJVKx/FqrLYHAQeN7VpJrPhagZc9R4ImZIWYRFZaaohR3KzmuK88touwsSwSVT8Qcbd4zoDsnGfX4GFB4imyQ==
@@ -769,10 +769,10 @@ fast-text-encoding@^1.0.0:
   resolved "https://registry.yarnpkg.com/fast-text-encoding/-/fast-text-encoding-1.0.3.tgz#ec02ac8e01ab8a319af182dae2681213cfe9ce53"
   integrity sha512-dtm4QZH9nZtcDt8qJiOH9fcQd1NAgi+K1O2DbE6GG1PPCK/BWfOH3idCTRQ4ImXRUOyopDEgDEnVEE7Y/2Wrig==
 
-fastify-cors@5.1.0:
-  version "5.1.0"
-  resolved "https://registry.yarnpkg.com/fastify-cors/-/fastify-cors-5.1.0.tgz#f34b11ed0b84fdc212edc2ad38c92ff85f163b8e"
-  integrity sha512-PTq4wSBFljXmbFKmp5eKW9gg0m488nXBl+OSTb/vnWXXLvVn7HFk7WKgt7uQVfd9UuksveCGTXipVlus3qhmrw==
+fastify-cors@5.2.0:
+  version "5.2.0"
+  resolved "https://registry.yarnpkg.com/fastify-cors/-/fastify-cors-5.2.0.tgz#a92af64d9b7df1cd736c90ecd894a7b23c0cd75a"
+  integrity sha512-Lde71qT23M3Ip3pmny3uN6q6lQ4J5J0/YWoqe2stL4sMT99R5LEtTJ2La2zijFOR5OFhxvxqGgR7BIc2x3amPg==
   dependencies:
     fastify-plugin "^3.0.0"
     vary "^1.1.2"
@@ -801,10 +801,10 @@ fastify-websocket@2.1.0:
     find-my-way "^3.0.5"
     ws "^7.4.2"
 
-fastify@3.10.1:
-  version "3.10.1"
-  resolved "https://registry.yarnpkg.com/fastify/-/fastify-3.10.1.tgz#9a17b395e162e90c2dded93353bf2e04410884ff"
-  integrity sha512-ChjHCXbCFzftVzQ1sDD8f8Ou1uDObkcVXBJmDkzVoZSNTxDrIapg63HIy3tPwScTNyMdmikA+QbP6zkGP+cFzw==
+fastify@3.11.0:
+  version "3.11.0"
+  resolved "https://registry.yarnpkg.com/fastify/-/fastify-3.11.0.tgz#2464c9a715603e6941308f55572d08a27ea7f2a6"
+  integrity sha512-xc0mTG3cZhBrpsHh5M+xujA/xAIfBCn6DLOWPqCbIBkt0TtfeDaXpBEtlejWp13eM8SZbyXnHcR6PJaOajbY/A==
   dependencies:
     abstract-logging "^2.0.0"
     ajv "^6.12.2"
