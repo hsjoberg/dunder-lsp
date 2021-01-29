@@ -17,6 +17,13 @@ export interface IChannelRequestDB {
   channelPoint: string | null;
 }
 
+export interface IHtlcSettlementDB {
+  channelId: string;
+  htlcId: number;
+  amountSat: number;
+  settled: number;
+}
+
 export async function createChannelRequest(
   db: Database,
   {
@@ -143,13 +150,6 @@ export async function getChannelRequestUnclaimedAmount(db: Database, pubkey: str
     },
   );
   return result.amountMsat ?? 0;
-}
-
-export interface IHtlcSettlementDB {
-  channelId: string;
-  htlcId: number;
-  amountSat: number;
-  settled: number;
 }
 
 export async function createHtlcSettlement(

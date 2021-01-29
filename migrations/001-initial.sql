@@ -20,6 +20,7 @@ CREATE TABLE htlcSettlement (
   amountSat INTEGER NOT NULL,
   settled BOOLEAN NOT NULL,
 
-  CONSTRAINT primarykey_htlcSettlement PRIMARY KEY (channelId, htlcId)
+  PRIMARY KEY (channelId, htlcId),
+  FOREIGN KEY (channelid) REFERENCES index_channelRequest(channelId)
   -- TODO foreign key channelId
 );
