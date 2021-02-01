@@ -29,6 +29,6 @@ The `master` branch always expects the latest version of lnd.
 This is the only way I could get NodeJS to work with ES6 modules,
 which is required for top-level await support.
 
-# LICENSE
+## License
 
 MIT

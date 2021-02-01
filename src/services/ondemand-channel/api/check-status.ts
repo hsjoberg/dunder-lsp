@@ -30,8 +30,7 @@ export default function CheckStatus(lightning: Client): RouteHandlerMethod {
     );
     if (checkStatusRequest.pubkey !== verifyMessageResponse.pubkey) {
       reply.code(400);
-      // TODO fix interface
-      const error = {
+      const error: IErrorResponse = {
         status: "ERROR",
         reason: "Public key mismatch",
       };
