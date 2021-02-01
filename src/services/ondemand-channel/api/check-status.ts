@@ -1,13 +1,14 @@
 import { Client } from "@grpc/grpc-js";
 import { RouteHandlerMethod } from "fastify";
 
-import { verifyMessage } from "../../../utils/lnd-api.js";
+import { verifyMessage } from "../../../utils/lnd-api";
 import {
   ChannelRequestStatus,
   getActiveChannelRequestsByPubkey,
   getChannelRequestUnclaimedAmount,
-} from "../../../db/ondemand-channel.js";
-import db from "../../../db/db.js";
+} from "../../../db/ondemand-channel";
+import { IErrorResponse } from "../index";
+import { Database } from "sqlite";
 
 export interface ICheckStatusRequest {
   pubkey: string;
@@ -19,7 +20,7 @@ export interface ICheckStatusResponse {
   unclaimedAmountSat: number;
 }
 
-export default function CheckStatus(lightning: Client): RouteHandlerMethod {
+export default function CheckStatus(db: Database, lightning: Client): RouteHandlerMethod {
   return async (request, reply) => {
     const checkStatusRequest = JSON.parse(request.body as string) as ICheckStatusRequest;
 

@@ -1,9 +1,9 @@
 import { Client, Metadata } from "@grpc/grpc-js";
 import Long from "long";
 
-import { hexToUint8Array, stringToUint8Array } from "./common.js";
-import { lnrpc, routerrpc } from "../proto.js";
-import { grpcMakeUnaryRequest } from "./grpc.js";
+import { hexToUint8Array, stringToUint8Array } from "./common";
+import { lnrpc, routerrpc } from "../proto";
+import { grpcMakeUnaryRequest } from "./grpc";
 
 export async function getInfo(lightning: Client) {
   const getInfoRequest = lnrpc.GetInfoRequest.encode({}).finish();

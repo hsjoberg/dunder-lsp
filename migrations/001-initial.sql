@@ -7,6 +7,7 @@ CREATE TABLE channelRequest (
   pubkey TEXT NOT NULL,
   preimage TEXT NOT NULL UNIQUE,
   status TEXT NOT NULL,
+  start INTEGER NOT NULL,
   expire INTEGER NOT NULL,
   expectedAmountSat INTEGER NOT NULL,
   channelPoint TEXT NULL

@@ -12,6 +12,7 @@ export interface IChannelRequestDB {
   pubkey: string;
   preimage: string;
   status: ChannelRequestStatus;
+  start: number;
   expire: number;
   expectedAmountSat: number;
   channelPoint: string | null;
@@ -31,6 +32,7 @@ export async function createChannelRequest(
     pubkey,
     preimage,
     status,
+    start,
     expire,
     expectedAmountSat,
     channelPoint,
@@ -42,6 +44,7 @@ export async function createChannelRequest(
         channelId,
         pubkey,
         preimage,
+        start,
         status,
         expire,
         expectedAmountSat,
@@ -53,6 +56,7 @@ export async function createChannelRequest(
         $pubkey,
         $preimage,
         $status,
+        $start,
         $expire,
         $expectedAmountSat,
         $channelPoint
@@ -63,6 +67,7 @@ export async function createChannelRequest(
       $pubkey: pubkey,
       $preimage: preimage,
       $status: status,
+      $start: start,
       $expire: expire,
       $expectedAmountSat: expectedAmountSat,
       $channelPoint: channelPoint,
@@ -71,7 +76,7 @@ export async function createChannelRequest(
 }
 
 /**
- * Note: Updating pubkey, preimage or expire is not allowed
+ * Note: Updating pubkey, preimage, start or expire is not allowed
  */
 export async function updateChannelRequest(
   db: Database,
@@ -101,27 +106,6 @@ export async function updateChannelRequest(
   );
 }
 
-/**
- * Note: Updating pubkey, preimage and expire is not allowed
- */
-export async function updateChannelRequestByPubkey(
-  db: Database,
-  { channelId, pubkey, preimage, status, expire, expectedAmountSat }: IChannelRequestDB,
-) {
-  await db.run(
-    `UPDATE channelRequest
-    SET status = $status,
-        expectedAmountSat = $expectedAmountSat
-    WHERE pubkey = $pubkey
-    `,
-    {
-      $pubkey: pubkey,
-      $status: status,
-      $expectedAmountSat: expectedAmountSat,
-    },
-  );
-}
-
 export function getActiveChannelRequestsByPubkey(db: Database, pubkey: string) {
   return db.all<IChannelRequestDB[]>(`SELECT * FROM channelRequest WHERE $pubkey = pubkey`, {
     $pubkey: pubkey,
@@ -135,8 +119,8 @@ export function getChannelRequest(db: Database, channelId: string) {
 }
 
 export async function getChannelRequestUnclaimedAmount(db: Database, pubkey: string) {
-  const result = await db.get(
-    `SELECT SUM(htlcSettlement.amount) as amountMsat
+  const result = await db.get<{ amountSat: number }>(
+    `SELECT SUM(htlcSettlement.amountSat) as amountSat
     FROM htlcSettlement
     JOIN channelRequest
       ON  channelRequest.channelId = htlcSettlement.channelId
@@ -149,7 +133,7 @@ export async function getChannelRequestUnclaimedAmount(db: Database, pubkey: str
       $settled: 0,
     },
   );
-  return result.amountMsat ?? 0;
+  return result?.amountSat ?? 0;
 }
 
 export async function createHtlcSettlement(

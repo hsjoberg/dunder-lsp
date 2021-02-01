@@ -1,11 +1,10 @@
 {
   "name": "dunder-lsp",
-  "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "start": "yarn build && sed -i '' 's/import \\* as $protobuf from \"protobufjs\\/minimal\"/import $protobuf from \"protobufjs\\/minimal.js\"/g' dist/proto.js && node --harmony-top-level-await dist/index.js",
-    "watch": "concurrently \"tsc -p tsconfig.json -w\" \"nodemon -w dist dist/index.js\"",
-    "proto": "pbjs --force-long -t static-module -w es6 --es6 -o src/proto.js proto/rpc.proto proto/router.proto && pbts -o src/proto.d.ts src/proto.js"
+    "build": "tsc -p tsconfig.json && cp src/proto.js dist",
+    "start": "yarn build && node dist/server.js",
+    "watch": "concurrently \"tsc -p tsconfig.json -w\" \"nodemon -w dist dist/server.js\"",
+    "proto": "pbjs --force-long -t static-module -o src/proto.js proto/rpc.proto proto/router.proto && pbts -o src/proto.d.ts src/proto.js"
   },
   "version": "1.0.0",
   "main": "index.js",

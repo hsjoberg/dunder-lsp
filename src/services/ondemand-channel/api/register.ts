@@ -1,35 +1,35 @@
 import { RouteHandlerMethod } from "fastify";
 import { Client, ClientDuplexStream } from "@grpc/grpc-js";
-import { differenceInSeconds } from "date-fns";
+import { differenceInSeconds, getUnixTime } from "date-fns";
 import Long from "long";
 
-import { routerrpc } from "../../../proto.js";
-import { MSAT } from "../../../utils/constants.js";
-import db from "../../../db/db.js";
+import { routerrpc } from "../../../proto";
+import { MSAT } from "../../../utils/constants";
 import {
   checkAllHtclSettlementsSettled,
   createChannelRequest,
   createHtlcSettlement,
-  getActiveChannelRequestsByPubkey,
   getChannelRequest,
   getHtlcSettlement,
+  IChannelRequestDB,
   updateChannelRequest,
   updateHtlcSettlement,
-} from "../../../db/ondemand-channel.js";
+} from "../../../db/ondemand-channel";
 import {
   bytesToHexString,
   generateShortChannelId,
   hexToUint8Array,
   sha256,
   timeout,
-} from "../../../utils/common.js";
+} from "../../../utils/common";
 import {
   htlcInterceptor,
   openChannelSync,
   subscribeHtlcEvents,
   verifyMessage,
-} from "../../../utils/lnd-api.js";
-import { checkPeerConnected, IErrorResponse } from "../index.js";
+} from "../../../utils/lnd-api";
+import { checkPeerConnected, IErrorResponse } from "../index";
+import { Database } from "sqlite";
 
 export interface IRegisterRequest {
   pubkey: string;
@@ -48,6 +48,7 @@ export interface IRegisterOkResponse {
 }
 
 export default function Register(
+  db: Database,
   lightning: Client,
   router: Client,
   servicePubKey: string,
@@ -60,8 +61,8 @@ export default function Register(
   // `subscribeHtlc` is used to check whether
   // the incoming payment was settled, if yes we can
   // open a channel to the requesting party.
-  interceptHtlc(lightning, router);
-  subscribeHtlc(lightning);
+  interceptHtlc(db, lightning, router);
+  subscribeHtlc(db, lightning);
 
   return async (request, reply) => {
     const registerRequest = JSON.parse(request.body as string) as IRegisterRequest;
@@ -93,24 +94,13 @@ export default function Register(
       return error;
     }
 
-    try {
-      const activeChannelRequests = await getActiveChannelRequestsByPubkey(
-        db,
-        registerRequest.pubkey,
-      );
-      if (activeChannelRequests.length > 0) {
-        // Dunno
-      }
-    } catch (e) {
-      console.error(e);
-    }
-
     const channelId = Long.fromValue(await generateShortChannelId());
     await createChannelRequest(db, {
       channelId: channelId.toString(),
       pubkey: registerRequest.pubkey,
       preimage: registerRequest.preimage,
       status: "REGISTERED",
+      start: getUnixTime(new Date()),
       expire: 600,
       expectedAmountSat: registerRequest.amount,
       channelPoint: null,
@@ -144,14 +134,14 @@ interface HtlcHodl {
 }
 const interceptedHtlcHodl: HtlcHodl = {};
 
-const interceptHtlc = (lightning: Client, router: Client) => {
+const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
   const stream = htlcInterceptor(router);
 
   stream.on("data", async (data) => {
     console.log("\nINTERCEPTING HTLC\n-----------");
     const request = routerrpc.ForwardHtlcInterceptRequest.decode(data);
-    console.log("incomingAmountMsat", request.incomingAmountMsat.toString());
     console.log("outgoingAmountMsat", request.outgoingAmountMsat.toString());
+    console.log("outgoingRequestedChanId", request.outgoingRequestedChanId.toString());
     console.log("incomingCircuitKey.htlcId", request.incomingCircuitKey?.htlcId?.toString());
 
     const channelRequest = await getChannelRequest(db, request.outgoingRequestedChanId.toString());
@@ -208,7 +198,6 @@ const interceptHtlc = (lightning: Client, router: Client) => {
 
     // Check if the requester is connected to our Lightning node
     if (!checkPeerConnected(lightning, channelRequest.pubkey)) {
-      // TODO error handling
       console.error("Wallet node not connected");
       const settleResponse = routerrpc.ForwardHtlcInterceptResponse.encode({
         action: routerrpc.ResolveHoldForwardAction.FAIL,
@@ -219,10 +208,11 @@ const interceptHtlc = (lightning: Client, router: Client) => {
     }
 
     const channelId = request.outgoingRequestedChanId.toString();
-    let openChannelWhenSettled = false;
     if (!interceptedHtlcHodl[channelId]) {
       interceptedHtlcHodl[channelId] = [];
-      openChannelWhenSettled = true;
+      // When the first HTLC for this payment is registed,
+      // we wait until we match expected amount, then settle everything.
+      openChannelWhenHtlcsSettled(db, lightning, channelRequest);
     }
 
     interceptedHtlcHodl[channelId].push({
@@ -264,67 +254,9 @@ const interceptHtlc = (lightning: Client, router: Client) => {
     }
 
     // Wait for all the parts to settle:
-    const start = new Date();
-    if (openChannelWhenSettled) {
-      while (true) {
-        const result = await checkAllHtclSettlementsSettled(
-          db,
-          request.outgoingRequestedChanId.toString(),
-        );
-        if (!result) {
-          // Time-out reached
-          if (differenceInSeconds(new Date(), start) > 10) {
-            console.warn("Timed out waiting for HTLC settements.");
-            console.warn("Attempting to cancel any outstanding ones.");
-            for (const hodl of interceptedHtlcHodl[channelId]) {
-              if (!hodl.settled) {
-                console.warn("Rejecting", hodl.htlcId.toString());
-                const settleResponse = routerrpc.ForwardHtlcInterceptResponse.encode({
-                  action: routerrpc.ResolveHoldForwardAction.FAIL,
-                  incomingCircuitKey: hodl.incomingCircuitKey,
-                }).finish();
-                hodl.stream.write(settleResponse);
-              }
-            }
-            delete interceptedHtlcHodl[channelId];
-            return;
-          }
-
-          console.log("HTLCs not settled yet waiting ...");
-          await timeout(1000);
-        } else {
-          const partTotal = interceptedHtlcHodl[channelId].reduce((prev, { amountMsat }) => {
-            return prev.add(amountMsat);
-          }, Long.fromValue(0));
-
-          if (partTotal.div(MSAT).notEquals(channelRequest.expectedAmountSat)) {
-            console.error(
-              "FATAL ERROR: Total part htlc amount mismatch with expected total amount",
-            );
-            break;
-          }
-
-          console.log("Opening channel");
-          const result = await openChannelSync(
-            lightning,
-            channelRequest.pubkey,
-            partTotal.div(MSAT).mul(2),
-            partTotal.div(MSAT),
-            true,
-            true,
-          );
-          const txId = bytesToHexString(result.fundingTxidBytes.reverse());
-          await updateChannelRequest(db, {
-            ...channelRequest,
-            status: "DONE",
-            channelPoint: `${txId}:${result.outputIndex}`,
-          });
-          delete interceptedHtlcHodl[channelId];
-          console.log("DONE");
-          break;
-        }
-      }
-    }
+    // const start = new Date();
+    // if (openChannelWhenSettled) {
+    // }
   });
 
   stream.on("error", (error) => {
@@ -333,7 +265,73 @@ const interceptHtlc = (lightning: Client, router: Client) => {
   });
 };
 
-const subscribeHtlc = (router: Client) => {
+async function openChannelWhenHtlcsSettled(
+  db: Database,
+  lightning: Client,
+  channelRequest: IChannelRequestDB,
+) {
+  const channelId = channelRequest.channelId;
+  const start = new Date();
+  while (true) {
+    const result = await checkAllHtclSettlementsSettled(db, channelId);
+    if (!result) {
+      // Timeout reached
+      if (differenceInSeconds(new Date(), start) > 10) {
+        console.warn("Timed out waiting for HTLC settements.");
+        console.warn("Attempting to cancel any outstanding ones.");
+        for (const hodl of interceptedHtlcHodl[channelId]) {
+          if (!hodl.settled) {
+            console.warn("Rejecting", hodl.htlcId.toString());
+            const settleResponse = routerrpc.ForwardHtlcInterceptResponse.encode({
+              action: routerrpc.ResolveHoldForwardAction.FAIL,
+              incomingCircuitKey: hodl.incomingCircuitKey,
+            }).finish();
+            hodl.stream.write(settleResponse);
+          }
+        }
+        delete interceptedHtlcHodl[channelId];
+        return;
+      }
+
+      console.log("HTLCs not settled yet waiting ...");
+      await timeout(1000);
+    } else {
+      const partTotal = interceptedHtlcHodl[channelId].reduce((prev, { amountMsat }) => {
+        return prev.add(amountMsat);
+      }, Long.fromValue(0));
+
+      if (partTotal.div(MSAT).notEquals(channelRequest.expectedAmountSat)) {
+        console.error("FATAL ERROR: Total part htlc amount mismatch with expected total amount");
+        break;
+      }
+
+      console.log("Opening channel");
+      try {
+        const result = await openChannelSync(
+          lightning,
+          channelRequest.pubkey,
+          partTotal.div(MSAT).mul(2),
+          partTotal.div(MSAT),
+          true,
+          true,
+        );
+        const txId = bytesToHexString(result.fundingTxidBytes.reverse());
+        await updateChannelRequest(db, {
+          ...channelRequest,
+          status: "DONE",
+          channelPoint: `${txId}:${result.outputIndex}`,
+        });
+      } catch (error) {
+        console.error("Could not open channel", error);
+      }
+      delete interceptedHtlcHodl[channelId];
+      console.log("DONE");
+      break;
+    }
+  }
+}
+
+const subscribeHtlc = (db: Database, router: Client) => {
   const stream = subscribeHtlcEvents(router);
 
   stream.on("data", async (data) => {
@@ -341,24 +339,20 @@ const subscribeHtlc = (router: Client) => {
     const htlcEvent = routerrpc.HtlcEvent.decode(data);
     console.log("event", htlcEvent.event);
     console.log("incomingHtlcId", htlcEvent.incomingHtlcId.toString());
-
     const outgoingChannelId = htlcEvent.outgoingChannelId;
     const incomingHtlcId = htlcEvent.incomingHtlcId;
-
     if (!htlcEvent.settleEvent) {
       return;
     }
-
     const hodl = interceptedHtlcHodl[outgoingChannelId.toString()]?.find(({ htlcId }) => {
       return incomingHtlcId.equals(htlcId);
     });
     if (!hodl) {
-      console.log("Could not find part HTLC.", incomingHtlcId.toString());
+      console.log("Could not find part HTLC", incomingHtlcId.toString());
       return;
     } else {
       hodl.settled = true;
     }
-
     const htlcSettlement = await getHtlcSettlement(
       db,
       outgoingChannelId.toString(),
@@ -368,7 +362,6 @@ const subscribeHtlc = (router: Client) => {
       console.error("FATAL ERROR: Could not find htlcSettlement in database");
       return;
     }
-
     await updateHtlcSettlement(db, {
       ...htlcSettlement,
       settled: 1,

@@ -3,7 +3,7 @@ import fastifyWebsocket from "fastify-websocket";
 import fastifyCors from "fastify-cors";
 import Long from "long";
 
-import "./db/db";
+import getDb from "./db/db";
 import { getInfo, estimateFee } from "./utils/lnd-api";
 import { getGrpcClients } from "./utils/grpc";
 
@@ -16,7 +16,7 @@ export default function (options?: FastifyServerOptions) {
 
   app.get("/", async () => "hello, world");
 
-  app.register(import("./services/ondemand-channel/index"), {
+  app.register(require("./services/ondemand-channel/index"), {
     prefix: "/ondemand-channel",
     lightning,
     router,

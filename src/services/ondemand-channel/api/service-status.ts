@@ -3,7 +3,7 @@ import config from "config";
 import { Client } from "@grpc/grpc-js";
 import Long from "long";
 
-import { estimateFee } from "../../../utils/lnd-api.js";
+import { estimateFee } from "../../../utils/lnd-api";
 
 export interface IServiceStatusResponse {
   status: boolean;
