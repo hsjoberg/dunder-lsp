@@ -1,6 +1,7 @@
 import { Client } from "@grpc/grpc-js";
 import Long from "long";
 import { Stream } from "stream";
+import { DuplexMock, BufferWritableMock } from "stream-mock";
 
 import { lnrpc } from "../../src/proto";
 import { stringToUint8Array } from "../../src/utils/common";
@@ -33,36 +34,35 @@ export async function listPeers(lightning: Client) {
   const listPeersReponse = lnrpc.ListPeersResponse.create({
     peers: [
       {
-        pubKey: "abcdef123456",
+        pubKey: "abcdef12345",
       },
     ],
   });
   return listPeersReponse;
 }
 
-export async function openChannelSync(
-  lightning: Client,
-  pubkey: string,
-  localFundingAmount: Long,
-  pushSat: Long,
-  privateChannel: boolean,
-  spendUnconfirmed: boolean,
-) {
+export const openChannelSync = jest.fn(() => {
   const openChannelSyncResponse = lnrpc.ChannelPoint.create({
     fundingTxidBytes: stringToUint8Array("abcdef"),
     outputIndex: 0,
   });
   return openChannelSyncResponse;
-}
+});
 
+export const __htlcInterceptorStream = new DuplexMock();
 export function htlcInterceptor(router: Client) {
-  return new Stream();
+  return __htlcInterceptorStream;
 }
 
+export const __subscribeHtlcEventsStream = new BufferWritableMock();
 export function subscribeHtlcEvents(router: Client) {
-  return new Stream();
+  return __subscribeHtlcEventsStream;
 }
 
 export function subscribeChannelEvents(lightning: Client) {
   return new Stream();
 }
+
+export const checkPeerConnected = jest.fn(() => {
+  return true;
+});

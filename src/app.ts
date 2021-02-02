@@ -3,7 +3,6 @@ import fastifyWebsocket from "fastify-websocket";
 import fastifyCors from "fastify-cors";
 import Long from "long";
 
-import getDb from "./db/db";
 import { getInfo, estimateFee } from "./utils/lnd-api";
 import { getGrpcClients } from "./utils/grpc";
 

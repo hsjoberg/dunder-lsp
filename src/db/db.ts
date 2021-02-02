@@ -4,13 +4,13 @@ import config from "config";
 
 let db: Database | null = null;
 
-export default async function getDb() {
-  if (db) {
+export default async function getDb(forceReopen: boolean = false) {
+  if (db && !forceReopen) {
     return db;
   }
 
   db = await open({
-    filename: "./database.db",
+    filename: config.get<string>("env") === "test" ? ":memory:" : "./database.db",
     driver: sqlite3.Database,
   });
   await db.migrate();

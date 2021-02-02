@@ -36,3 +36,7 @@ export const timeout = (time: number) =>
 export function sha256(bytes: Uint8Array) {
   return createHash("sha256").update(bytes).digest("hex");
 }
+
+export function sha256Buffer(bytes: Uint8Array) {
+  return createHash("sha256").update(bytes).digest();
+}

@@ -3,7 +3,7 @@ if (config.util.getConfigSources().length === 0) {
   throw new Error("Could not find any config sources. Did you forget to create the config file?");
 }
 
-import app from "./app.js";
+import app from "./app";
 
 const host = config.get<string>("serverHost");
 const domain = host.split(":")[0];

@@ -26,12 +26,3 @@ const OnDemandChannel = async function (app, { lightning, router }) {
 } as FastifyPluginAsync<{ lightning: Client; router: Client }>;
 
 export default OnDemandChannel;
-
-export async function checkPeerConnected(lightning: Client, pubkey: string) {
-  const listPeersResponse = await listPeers(lightning);
-  const seekPeer = listPeersResponse.peers.find((peer) => {
-    return peer.pubKey === pubkey;
-  });
-
-  return !!seekPeer;
-}

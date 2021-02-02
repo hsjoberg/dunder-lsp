@@ -27,9 +27,11 @@ import {
   openChannelSync,
   subscribeHtlcEvents,
   verifyMessage,
+  checkPeerConnected,
 } from "../../../utils/lnd-api";
-import { checkPeerConnected, IErrorResponse } from "../index";
+import { IErrorResponse } from "../index";
 import { Database } from "sqlite";
+import config from "config";
 
 export interface IRegisterRequest {
   pubkey: string;
@@ -135,6 +137,7 @@ interface HtlcHodl {
 const interceptedHtlcHodl: HtlcHodl = {};
 
 const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
+  const htlcWaitMs = config.get<number>("htlcWaitMs");
   const stream = htlcInterceptor(router);
 
   stream.on("data", async (data) => {
@@ -197,6 +200,7 @@ const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
     // const estimatedFeeMsat = feeResult.feeSat.mul(MSAT);
 
     // Check if the requester is connected to our Lightning node
+    // TODO(hsjoberg): maybe this is too harsh
     if (!checkPeerConnected(lightning, channelRequest.pubkey)) {
       console.error("Wallet node not connected");
       const settleResponse = routerrpc.ForwardHtlcInterceptResponse.encode({
@@ -212,7 +216,7 @@ const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
       interceptedHtlcHodl[channelId] = [];
       // When the first HTLC for this payment is registed,
       // we wait until we match expected amount, then settle everything.
-      openChannelWhenHtlcsSettled(db, lightning, channelRequest);
+      openChannelWhenHtlcsSettled(db, lightning, channelRequest, htlcWaitMs);
     }
 
     interceptedHtlcHodl[channelId].push({
@@ -252,13 +256,9 @@ const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
         });
       }
     }
-
-    // Wait for all the parts to settle:
-    // const start = new Date();
-    // if (openChannelWhenSettled) {
-    // }
   });
 
+  // TODO(hsjoberg)
   stream.on("error", (error) => {
     console.log("error");
     console.log(error);
@@ -269,6 +269,7 @@ async function openChannelWhenHtlcsSettled(
   db: Database,
   lightning: Client,
   channelRequest: IChannelRequestDB,
+  timeoutMs: number,
 ) {
   const channelId = channelRequest.channelId;
   const start = new Date();
@@ -276,7 +277,7 @@ async function openChannelWhenHtlcsSettled(
     const result = await checkAllHtclSettlementsSettled(db, channelId);
     if (!result) {
       // Timeout reached
-      if (differenceInSeconds(new Date(), start) > 10) {
+      if (differenceInSeconds(new Date(), start) > timeoutMs) {
         console.warn("Timed out waiting for HTLC settements.");
         console.warn("Attempting to cancel any outstanding ones.");
         for (const hodl of interceptedHtlcHodl[channelId]) {

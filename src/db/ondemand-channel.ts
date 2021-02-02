@@ -65,7 +65,7 @@ export async function createChannelRequest(
     {
       $channelId: channelId,
       $pubkey: pubkey,
-      $preimage: preimage,
+      $preimage: preimage || "abc",
       $status: status,
       $start: start,
       $expire: expire,
@@ -95,8 +95,7 @@ export async function updateChannelRequest(
     SET status = $status,
         expectedAmountSat = $expectedAmountSat,
         channelPoint = $channelPoint
-    WHERE channelId = $channelId
-    `,
+    WHERE channelId = $channelId`,
     {
       $channelId: channelId,
       $status: status,
@@ -125,9 +124,7 @@ export async function getChannelRequestUnclaimedAmount(db: Database, pubkey: str
     JOIN channelRequest
       ON  channelRequest.channelId = htlcSettlement.channelId
       AND channelRequest.pubkey = $pubkey
-    WHERE htlcSettlement.settled = $settled
-
-    `,
+    WHERE htlcSettlement.settled = $settled`,
     {
       $pubkey: pubkey,
       $settled: 0,
@@ -175,6 +172,7 @@ export async function getHtlcSettlement(db: Database, channelId: string, htlcId:
   );
 }
 
+// TODO(hsjoberg): function is not used anywhere
 export async function getHtlcSettlements(db: Database, channelId: string) {
   return db.all<IHtlcSettlementDB[]>(`SELECT * FROM htlcSettlement WHERE channelId = $channelId`, {
     $channelId: channelId,

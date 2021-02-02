@@ -1,7 +1,8 @@
 {
+  "env": "development",
   "serverHost": "0.0.0.0:8080",
   "backend": "lnd",
-  "env": "development",
+  "htlcWaitMs": 50,
   "backendConfig": {
     "lndNode": "127.0.0.1:9735",
     "grpcServer": "127.0.0.1:10009",
