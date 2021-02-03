@@ -21,7 +21,7 @@ export default function ServiceStatus(
     const estimateFeeResponse = await estimateFee(lightning, Long.fromValue(100000), 1);
 
     // Close down the service if fees are too high
-    const status = estimateFeeResponse.feerateSatPerByte.greaterThanOrEqual(200);
+    const status = !estimateFeeResponse.feerateSatPerByte.greaterThanOrEqual(200);
 
     // The miminum payment we'll accept is fee * 5
     const minimumPaymentSat = estimateFeeResponse.feeSat.mul(5);
