@@ -34,7 +34,7 @@ import { IErrorResponse } from "../index";
 import { Database } from "sqlite";
 import config from "config";
 import ServiceStatus from "./service-status";
-import { checkFeeTooHigh, getMinimumPaymentSat } from "./utils";
+import { checkFeeTooHigh, getMaximumPaymentSat, getMinimumPaymentSat } from "./utils";
 
 export interface IRegisterRequest {
   pubkey: string;
@@ -106,14 +106,22 @@ export default function Register(
 
     // The miminum payment we'll accept
     const minimumPaymentSat = getMinimumPaymentSat(estimateFeeResponse.feeSat);
-    if (
-      registerRequest.amount < 1 ||
-      minimumPaymentSat.subtract(10000).greaterThan(registerRequest.amount)
-    ) {
+    if (registerRequest.amount < 1 || minimumPaymentSat - 10000 > registerRequest.amount) {
       reply.code(400);
       const error: IErrorResponse = {
         status: "ERROR",
         reason: `The requested invoice is below the minimum requirement of ${minimumPaymentSat.toString()} satoshi`,
+      };
+      return error;
+    }
+
+    // The maximum payment we'll accept
+    const maximumPaymentSat = getMaximumPaymentSat();
+    if (registerRequest.amount > maximumPaymentSat) {
+      reply.code(400);
+      const error: IErrorResponse = {
+        status: "ERROR",
+        reason: `The requested invoice is above the maximum limit of ${maximumPaymentSat} satoshi`,
       };
       return error;
     }

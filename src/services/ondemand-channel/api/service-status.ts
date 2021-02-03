@@ -4,12 +4,13 @@ import { Client } from "@grpc/grpc-js";
 import Long from "long";
 
 import { estimateFee } from "../../../utils/lnd-api";
-import { checkFeeTooHigh, getMinimumPaymentSat } from "./utils";
+import { checkFeeTooHigh, getMaximumPaymentSat, getMinimumPaymentSat } from "./utils";
 
 export interface IServiceStatusResponse {
   status: boolean;
   approxFeeSat: number;
   minimumPaymentSat: number;
+  maximumPaymentSat: number;
   peer: string;
 }
 
@@ -30,12 +31,14 @@ export default function ServiceStatus(
     // The miminum payment we'll accept
     const minimumPaymentSat = getMinimumPaymentSat(estimateFeeResponse.feeSat);
 
-    // TODO(hsjoberg): maximum payment?
+    // The maximum payment we'll accept
+    const maximumPaymentSat = getMaximumPaymentSat();
 
     const response: IServiceStatusResponse = {
       status,
       approxFeeSat: estimateFeeResponse.feeSat.toNumber(),
-      minimumPaymentSat: minimumPaymentSat.toNumber(),
+      minimumPaymentSat,
+      maximumPaymentSat,
       peer: `${servicePubKey}@${lndNode}`,
     };
     return response;

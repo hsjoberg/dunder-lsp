@@ -5,5 +5,12 @@ export function checkFeeTooHigh(feerateSatPerByte: Long, feeSat: Long) {
 }
 
 export function getMinimumPaymentSat(feeEstimateSat: Long) {
-  return feeEstimateSat.mul(5);
+  return Math.max(
+    feeEstimateSat.mul(5).toNumber(),
+    20000, // lnd minchansize
+  );
+}
+
+export function getMaximumPaymentSat() {
+  return 1000000;
 }
