@@ -23,7 +23,7 @@ describe("/ondemand-channel/register", () => {
     const htlcPart = Long.fromValue(123);
 
     const response = await sendRegisterRequest(app, {
-      amount: amountSat,
+      amountSat,
       preimage: bytesToHexString(preimage),
       pubkey,
       signature,

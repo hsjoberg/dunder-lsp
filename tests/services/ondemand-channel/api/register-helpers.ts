@@ -7,10 +7,10 @@ import { IRegisterRequest } from "../../../../src/services/ondemand-channel/api/
 
 export async function sendRegisterRequest(
   app: FastifyInstance,
-  { amount, preimage, pubkey }: IRegisterRequest,
+  { amountSat, preimage, pubkey }: IRegisterRequest,
 ) {
   const payload: IRegisterRequest = {
-    amount,
+    amountSat,
     preimage,
     pubkey,
     signature: "validsig",

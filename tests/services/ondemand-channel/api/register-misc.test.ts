@@ -15,7 +15,7 @@ describe("/ondemand-channel/register", () => {
     const signature = "badsig";
 
     const response = await sendRegisterRequest(app, {
-      amount: amountSat,
+      amountSat,
       preimage: bytesToHexString(preimage),
       pubkey,
       signature,
@@ -38,7 +38,7 @@ describe("/ondemand-channel/register", () => {
     });
 
     const response = await sendRegisterRequest(app, {
-      amount: amountSat,
+      amountSat,
       preimage: bytesToHexString(preimage),
       pubkey,
       signature,

@@ -33,14 +33,14 @@ import {
 import { IErrorResponse } from "../index";
 import { Database } from "sqlite";
 import config from "config";
-import ServiceStatus from "./service-status";
+
 import { checkFeeTooHigh, getMaximumPaymentSat, getMinimumPaymentSat } from "./utils";
 
 export interface IRegisterRequest {
   pubkey: string;
   signature: string; // Message has to be REGISTER base64
   preimage: string;
-  amount: number;
+  amountSat: number;
 }
 
 export interface IRegisterOkResponse {
@@ -106,7 +106,7 @@ export default function Register(
 
     // The miminum payment we'll accept
     const minimumPaymentSat = getMinimumPaymentSat(estimateFeeResponse.feeSat);
-    if (registerRequest.amount < 1 || minimumPaymentSat - 10000 > registerRequest.amount) {
+    if (registerRequest.amountSat < 1 || minimumPaymentSat - 10000 > registerRequest.amountSat) {
       reply.code(400);
       const error: IErrorResponse = {
         status: "ERROR",
@@ -117,7 +117,7 @@ export default function Register(
 
     // The maximum payment we'll accept
     const maximumPaymentSat = getMaximumPaymentSat();
-    if (registerRequest.amount > maximumPaymentSat) {
+    if (registerRequest.amountSat > maximumPaymentSat) {
       reply.code(400);
       const error: IErrorResponse = {
         status: "ERROR",
@@ -144,7 +144,7 @@ export default function Register(
       status: "REGISTERED",
       start: getUnixTime(new Date()),
       expire: 600,
-      expectedAmountSat: registerRequest.amount,
+      expectedAmountSat: registerRequest.amountSat,
       channelPoint: null,
     });
 
@@ -365,7 +365,9 @@ async function openChannelWhenHtlcsSettled(
       } catch (error) {
         console.error("Could not open channel", error);
       }
+      console.log("Before", interceptedHtlcHodl);
       delete interceptedHtlcHodl[channelId];
+      console.log("After", interceptedHtlcHodl);
       console.log("DONE");
       break;
     }
