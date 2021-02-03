@@ -28,10 +28,13 @@ import {
   subscribeHtlcEvents,
   verifyMessage,
   checkPeerConnected,
+  estimateFee,
 } from "../../../utils/lnd-api";
 import { IErrorResponse } from "../index";
 import { Database } from "sqlite";
 import config from "config";
+import ServiceStatus from "./service-status";
+import { checkFeeTooHigh, getMinimumPaymentSat } from "./utils";
 
 export interface IRegisterRequest {
   pubkey: string;
@@ -82,6 +85,35 @@ export default function Register(
         reason:
           "The Public key provided doesn't match with the public key extracted from the signature. " +
           "Either the signature is wrong or you have signed with the wrong wallet.",
+      };
+      return error;
+    }
+
+    // Check if onchain fee is too high
+    const estimateFeeResponse = await estimateFee(lightning, Long.fromValue(100000), 1);
+    const feesTooHigh = checkFeeTooHigh(
+      estimateFeeResponse.feerateSatPerByte,
+      estimateFeeResponse.feeSat,
+    );
+    if (feesTooHigh) {
+      reply.code(503);
+      const error: IErrorResponse = {
+        status: "ERROR",
+        reason: "Dunder is currently not available because Bitcoin onchain fees are too high.",
+      };
+      return error;
+    }
+
+    // The miminum payment we'll accept
+    const minimumPaymentSat = getMinimumPaymentSat(estimateFeeResponse.feeSat);
+    if (
+      registerRequest.amount < 1 ||
+      minimumPaymentSat.subtract(10000).greaterThan(registerRequest.amount)
+    ) {
+      reply.code(400);
+      const error: IErrorResponse = {
+        status: "ERROR",
+        reason: `The requested invoice is below the minimum requirement of ${minimumPaymentSat.toString()} satoshi`,
       };
       return error;
     }
@@ -336,7 +368,7 @@ const subscribeHtlc = (db: Database, router: Client) => {
   const stream = subscribeHtlcEvents(router);
 
   stream.on("data", async (data) => {
-    console.log("\nINCOMMING HTLC EVENT\n-----------");
+    console.log("\nINCOMING HTLC EVENT\n-----------");
     const htlcEvent = routerrpc.HtlcEvent.decode(data);
     console.log("event", htlcEvent.event);
     console.log("incomingHtlcId", htlcEvent.incomingHtlcId.toString());

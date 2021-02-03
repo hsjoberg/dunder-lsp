@@ -9,3 +9,4 @@ src/proto.js
 src/proto.d.ts
 coverage
 .nyc_output
+.DS_Store

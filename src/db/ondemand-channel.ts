@@ -65,7 +65,7 @@ export async function createChannelRequest(
     {
       $channelId: channelId,
       $pubkey: pubkey,
-      $preimage: preimage || "abc",
+      $preimage: preimage,
       $status: status,
       $start: start,
       $expire: expire,

@@ -14,7 +14,7 @@ export async function getInfo(lightning: Client) {
 }
 
 export async function estimateFee(lightning: Client, amount: Long, targetConf: number) {
-  const estimateFeeResponse = lnrpc.EstimateFeeResponse.encode({
+  const estimateFeeResponse = lnrpc.EstimateFeeResponse.create({
     feeSat: Long.fromValue(10),
     feerateSatPerByte: Long.fromValue(100),
   });

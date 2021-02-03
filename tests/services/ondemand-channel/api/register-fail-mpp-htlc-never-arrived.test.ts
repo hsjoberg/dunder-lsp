@@ -8,7 +8,7 @@ import build from "../../../../src/app";
 import { bytesToHexString, sha256Buffer, timeout } from "../../../../src/utils/common";
 import { createForwardHtlcInterceptRequest, sendRegisterRequest } from "./register-helpers";
 
-jest.setTimeout(70 * 1000);
+jest.setTimeout(20 * 1000);
 
 // Mocked functions
 import { openChannelSync } from "../../../../mocks/utils/lnd-api";
@@ -61,7 +61,7 @@ describe("/ondemand-channel/register", () => {
         routerrpc.ResolveHoldForwardAction.FAIL,
       );
       expect(openChannelSync).not.toBeCalled();
-    }, 60 * 1000);
+    }, 20 * 1000);
 
     await timeout(500);
 

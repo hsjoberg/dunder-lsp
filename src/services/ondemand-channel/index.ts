@@ -1,8 +1,7 @@
 import { FastifyPluginAsync } from "fastify";
 import { Client } from "@grpc/grpc-js";
-import { Database } from "sqlite";
 
-import { getInfo, listPeers } from "../../utils/lnd-api";
+import { getInfo } from "../../utils/lnd-api";
 import Register from "./api/register";
 import ServiceStatus from "./api/service-status";
 import CheckStatus from "./api/check-status";
