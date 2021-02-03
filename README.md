@@ -24,10 +24,11 @@ The `master` branch always expects the latest version of lnd.
 4. `yarn`
 5. `yarn start`
 
-## Why does every local import include the file extension (.js)?
+# Test
 
-This is the only way I could get NodeJS to work with ES6 modules,
-which is required for top-level await support.
+To do tests run `yarn test` or `yarn test:coverage`.
+
+Any new code should not decerease code coverage significantly.
 
 ## License
 
