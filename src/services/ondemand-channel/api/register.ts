@@ -45,8 +45,8 @@ export interface IRegisterRequest {
 
 export interface IRegisterOkResponse {
   status: "OK";
-  servicePubKey: string;
-  fakeChannelId: string;
+  servicePubkey: string;
+  fakeChannelId: string; // TODO make these as an array of route hints instead
   cltvExpiryDelta: number;
   feeBaseMsat: number;
   feeProportionalMillionths: number;
@@ -56,7 +56,7 @@ export default function Register(
   db: Database,
   lightning: Client,
   router: Client,
-  servicePubKey: string,
+  servicePubkey: string,
 ): RouteHandlerMethod {
   // Start the HTLC interception
   //
@@ -150,7 +150,7 @@ export default function Register(
 
     const response: IRegisterOkResponse = {
       status: "OK",
-      servicePubKey,
+      servicePubkey,
       fakeChannelId: channelId.toString(10),
       cltvExpiryDelta: 40,
       feeBaseMsat: 1,
