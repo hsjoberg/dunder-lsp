@@ -33,10 +33,13 @@ export default function CheckStatus(db: Database, lightning: Client): RouteHandl
       reply.code(400);
       const error: IErrorResponse = {
         status: "ERROR",
-        reason: "Public key mismatch",
+        reason:
+          "The Public key provided doesn't match with the public key extracted from the signature. " +
+          "Either the signature is wrong or you have signed with the wrong wallet.",
       };
       return error;
     }
+
     const channelRequests = await getActiveChannelRequestsByPubkey(db, checkStatusRequest.pubkey);
     const unclaimed = await getChannelRequestUnclaimedAmount(db, checkStatusRequest.pubkey);
 
