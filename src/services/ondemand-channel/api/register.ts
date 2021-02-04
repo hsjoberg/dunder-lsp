@@ -199,6 +199,22 @@ const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
       return;
     }
 
+    if (
+      await getHtlcSettlement(
+        db,
+        request.outgoingRequestedChanId?.toString(),
+        request.incomingCircuitKey?.htlcId?.toNumber() ?? 0,
+      )
+    ) {
+      console.error("WARNING, already found settlement in database");
+      const settleResponse = routerrpc.ForwardHtlcInterceptResponse.encode({
+        action: routerrpc.ResolveHoldForwardAction.FAIL,
+        incomingCircuitKey: request.incomingCircuitKey,
+      }).finish();
+      stream.write(settleResponse);
+      return;
+    }
+
     console.log("MARKING UP INCOMING HTLC FOR SETTLEMENT");
     const paymentHash = sha256(hexToUint8Array(channelRequest.preimage ?? ""));
     if (bytesToHexString(request.paymentHash) !== paymentHash) {
