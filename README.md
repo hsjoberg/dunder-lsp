@@ -1,5 +1,8 @@
 # 💥 Dunder LSP
 
+_Work In Progress, not suited for production just yet._  
+_Contributions, suggestions and ideas are appreciated._
+
 Dunder is a Lightning Service Provider for the Bitcoin Lightning Network.
 
 It currently supports "on demand channel openings", meaning if a Lightning wallet
@@ -14,9 +17,7 @@ More on how this works [here](https://github.com/hsjoberg/blixt-wallet/issues/24
 Dunder require lnd as the Lightning backend right now, though the plan is to
 make the service implementation independent.
 
-Dunder expects lnd dir to be in `<home>/.lnd`.
-
-The `master` branch always expects the latest version of lnd.
+The `master` branch always expects the latest version of lnd. Lnd compiled with routerrpc is required.
 
 1. Run lnd, wallet must be unlocked for Dunder to operate correctly
 2. `git clone https://github.com/hsjoberg/dunder-lsp && cd dunder-lsp`
