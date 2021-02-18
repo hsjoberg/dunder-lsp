@@ -1,4 +1,5 @@
 import Long from "long";
+import config from "config";
 
 export function checkFeeTooHigh(feerateSatPerByte: Long, feeSat: Long) {
   return feerateSatPerByte.greaterThanOrEqual(200) || feeSat.greaterThan(33140);
@@ -12,5 +13,5 @@ export function getMinimumPaymentSat(feeEstimateSat: Long) {
 }
 
 export function getMaximumPaymentSat() {
-  return 1000000;
+  return config.get<number>("maximumPaymentSat");
 }

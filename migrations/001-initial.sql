@@ -22,6 +22,6 @@ CREATE TABLE htlcSettlement (
   settled BOOLEAN NOT NULL,
 
   PRIMARY KEY (channelId, htlcId),
-  FOREIGN KEY (channelid) REFERENCES index_channelRequest(channelId),
+  FOREIGN KEY (channelId) REFERENCES channelRequest(channelId),
   CHECK (settled IN (0, 1))
 );
