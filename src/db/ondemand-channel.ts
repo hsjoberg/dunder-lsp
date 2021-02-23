@@ -128,7 +128,7 @@ export async function getChannelRequestUnclaimedAmount(db: Database, pubkey: str
     WHERE htlcSettlement.claimed = $claimed`,
     {
       $pubkey: pubkey,
-      $settled: 1,
+      $claimed: 1,
     },
   );
   return result?.amountSat ?? 0;
