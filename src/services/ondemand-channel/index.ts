@@ -21,7 +21,7 @@ const OnDemandChannel = async function (app, { lightning, router }) {
   app.get("/service-status", ServiceStatus(lightning, servicePubKey));
   app.post("/register", Register(db, lightning, router, servicePubKey));
   app.post("/check-status", CheckStatus(db, lightning));
-  app.post("/claim", Claim(lightning));
+  app.post("/claim", Claim(db, lightning));
 } as FastifyPluginAsync<{ lightning: Client; router: Client }>;
 
 export default OnDemandChannel;
