@@ -23,6 +23,7 @@ export interface IHtlcSettlementDB {
   htlcId: number;
   amountSat: number;
   settled: number;
+  claimed: number;
 }
 
 export async function createChannelRequest(
@@ -135,7 +136,7 @@ export async function getChannelRequestUnclaimedAmount(db: Database, pubkey: str
 
 export async function createHtlcSettlement(
   db: Database,
-  { channelId, htlcId, amountSat, settled }: IHtlcSettlementDB,
+  { channelId, htlcId, amountSat, settled, claimed }: IHtlcSettlementDB,
 ) {
   await db.run(
     `INSERT INTO htlcSettlement
@@ -143,14 +144,16 @@ export async function createHtlcSettlement(
         channelId,
         htlcId,
         amountSat,
-        settled
+        settled,
+        claimed
       )
     VALUES
       (
         $channelId,
         $htlcId,
         $amountSat,
-        $settled
+        $settled,
+        $claimed
       )
     `,
     {
@@ -158,6 +161,7 @@ export async function createHtlcSettlement(
       $htlcId: htlcId,
       $amountSat: amountSat,
       $settled: settled,
+      $claimed: claimed,
     },
   );
 }
@@ -181,18 +185,45 @@ export async function getHtlcSettlements(db: Database, channelId: string) {
 
 export async function updateHtlcSettlement(
   db: Database,
-  { channelId, htlcId, amountSat, settled }: IHtlcSettlementDB,
+  { channelId, htlcId, amountSat, settled, claimed }: IHtlcSettlementDB,
 ) {
   await db.run(
     `UPDATE htlcSettlement
     SET   amountSat = $amountSat,
-          settled = $settled
+          settled = $settled,
+          claimed = $claimed
     WHERE channelId = $channelId AND htlcId = $htlcId`,
     {
-      $channelId: channelId,
-      $htlcId: htlcId,
       $amountSat: amountSat,
       $settled: settled,
+      $claimed: claimed,
+      $channelId: channelId,
+      $htlcId: htlcId,
+    },
+  );
+}
+
+export async function updateHtlcSettlementSetAllAsClaimed(db: Database, pubkey: string) {
+  await db.run(
+    `UPDATE htlcSettlement
+    SET claimed = $claimed
+    JOIN  channelRequest ON channelRequest.channelId = htlcSettlement.channelId
+    AND   channelRequest.pubkey = $pubkey`,
+    {
+      $pubkey: pubkey,
+      $claimed: 1,
+    },
+  );
+}
+
+export async function updateHtlcSettlementByChannelIdSetAsClaimed(db: Database, channelId: string) {
+  await db.run(
+    `UPDATE htlcSettlement
+    SET claimed = $claimed
+    WHERE channelId = $channelId`,
+    {
+      $channelId: channelId,
+      $claimed: 1,
     },
   );
 }

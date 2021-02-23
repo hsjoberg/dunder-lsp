@@ -20,8 +20,10 @@ CREATE TABLE htlcSettlement (
   htlcId INTEGER NOT NULL,
   amountSat INTEGER NOT NULL,
   settled BOOLEAN NOT NULL,
+  claimed BOOLEAN NOT NULL,
 
   PRIMARY KEY (channelId, htlcId),
   FOREIGN KEY (channelId) REFERENCES channelRequest(channelId),
-  CHECK (settled IN (0, 1))
+  CHECK (settled IN (0, 1)),
+  CHECK (claimed IN (0, 1))
 );

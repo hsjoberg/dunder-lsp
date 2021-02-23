@@ -16,6 +16,7 @@ import {
   IChannelRequestDB,
   updateChannelRequest,
   updateHtlcSettlement,
+  updateHtlcSettlementByChannelIdSetAsClaimed,
 } from "../../../db/ondemand-channel";
 import {
   bytesToHexString,
@@ -358,6 +359,7 @@ const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
           htlcId: hodl.htlcId.toNumber(),
           amountSat: hodl.amountMsat.div(MSAT).toNumber(),
           settled: 0,
+          claimed: 0,
         });
       }
     }
@@ -437,13 +439,13 @@ async function openChannelWhenHtlcsSettled(
         );
         const txId = bytesToHexString(result.fundingTxidBytes.reverse());
 
-        // Once we've opened a channel, we mark the channel requset as completed
-        // TODO(hsjoberg): mark HTLCs as claimed!!!
+        // Once we've opened a channel, we mark the channel request as completed
         await updateChannelRequest(db, {
           ...channelRequest,
           status: "DONE",
           channelPoint: `${txId}:${result.outputIndex}`,
         });
+        await updateHtlcSettlementByChannelIdSetAsClaimed(db, channelId);
       } catch (error) {
         console.error("Could not open channel", error);
       }
@@ -487,7 +489,11 @@ const subscribeHtlc = (db: Database, router: Client) => {
       incomingHtlcId.toNumber(),
     );
     if (!htlcSettlement) {
-      console.error("FATAL ERROR: Could not find htlcSettlement in database");
+      console.error(
+        `FATAL ERROR: Could not find htlcSettlement ` +
+          `(outgoingChannelId=${outgoingChannelId.toString()} ` +
+          `incomingHtlcId=${incomingHtlcId.toString()}) in database`,
+      );
       return;
     }
     await updateHtlcSettlement(db, {
