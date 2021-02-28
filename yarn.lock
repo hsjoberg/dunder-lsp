@@ -1794,6 +1794,14 @@ fastify-warning@^0.2.0:
   resolved "https://registry.yarnpkg.com/fastify-warning/-/fastify-warning-0.2.0.tgz#e717776026a4493dc9a2befa44db6d17f618008f"
   integrity sha512-s1EQguBw/9qtc1p/WTY4eq9WMRIACkj+HTcOIK1in4MV5aFaQC9ZCIt0dJ7pr5bIf4lPpHvAtP2ywpTNgs7hqw==
 
+fastify-websocket@^3.0.0:
+  version "3.0.0"
+  resolved "https://registry.yarnpkg.com/fastify-websocket/-/fastify-websocket-3.0.0.tgz#da423991ac3260ba8022f83a30c18508275276a2"
+  integrity sha512-WD9vWoMP8cDVFfcJzLupZ9UHRLnWpxmQ9kdcPaIhilZLndXMbk7H4vHzQ0GSfpld8p6eopGuWr3MXpH5n2/CuA==
+  dependencies:
+    fastify-plugin "^3.0.0"
+    ws "^7.4.2"
+
 fastify@3.12.0:
   version "3.12.0"
   resolved "https://registry.yarnpkg.com/fastify/-/fastify-3.12.0.tgz#b5e3500a98ed63934d01d5949801f5ea2dc5cd17"
@@ -4879,6 +4887,11 @@ ws@^7.2.3:
   version "7.4.2"
   resolved "https://registry.yarnpkg.com/ws/-/ws-7.4.2.tgz#782100048e54eb36fe9843363ab1c68672b261dd"
   integrity sha512-T4tewALS3+qsrpGI/8dqNMLIVdq/g/85U98HPMa6F0m6xTbvhXU6RCQLqPH3+SlomNV/LdY6RXEbBpMH6EOJnA==
+
+ws@^7.4.2:
+  version "7.4.3"
+  resolved "https://registry.yarnpkg.com/ws/-/ws-7.4.3.tgz#1f9643de34a543b8edb124bdcbc457ae55a6e5cd"
+  integrity sha512-hr6vCR76GsossIRsr8OLR9acVVm1jyfEWvhbNjtgPOrfvAlKzvyeg/P6r8RuDjRyrcQoPQT7K0DGEPc7Ae6jzA==
 
 xml-name-validator@^3.0.0:
   version "3.0.0"
