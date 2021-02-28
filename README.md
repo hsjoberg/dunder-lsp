@@ -14,12 +14,12 @@ More on how this works [here](https://github.com/hsjoberg/blixt-wallet/issues/24
 
 ## Build
 
-Dunder require lnd as the Lightning backend right now, though the plan is to
+Dunder requires lnd as the Lightning backend right now, though the plan is to
 make the service implementation independent.
 
-The `master` branch always expects the latest version of lnd. Lnd compiled with routerrpc is required.
+The `master` branch always expects the latest version of lnd, which must be compiled with routerrpc enabled.
 
-1. Run lnd, wallet must be unlocked for Dunder to operate correctly
+1. Run lnd. The wallet must be unlocked for Dunder to operate correctly.
 2. `git clone https://github.com/hsjoberg/dunder-lsp && cd dunder-lsp`
 3. Copy `config/default.json_TEMPLATE` to `config/default.json` and set up your configuration
 4. `yarn`
