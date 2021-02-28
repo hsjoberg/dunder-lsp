@@ -5,7 +5,6 @@ import Long from "long";
 
 import {
   getChannelRequestUnclaimedAmount,
-  updateChannelRequest,
   updateHtlcSettlementSetAllAsClaimed,
 } from "../../../db/ondemand-channel";
 import { checkPeerConnected, openChannelSync, verifyMessage } from "../../../utils/lnd-api";

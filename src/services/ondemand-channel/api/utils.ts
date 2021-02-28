@@ -1,9 +1,9 @@
 import Long from "long";
 import config from "config";
-import { MIN_CHANNEL_SIZE_SAT } from "../../../utils/constants";
+import { MAX_ACCEPTED_FEE, MAX_ACCEPTED_FEE_PER_BYTE, MIN_CHANNEL_SIZE_SAT } from "../../../utils/constants";
 
 export function checkFeeTooHigh(feerateSatPerByte: Long, feeSat: Long) {
-  return feerateSatPerByte.greaterThanOrEqual(200) || feeSat.greaterThan(33140);
+  return feerateSatPerByte.greaterThanOrEqual(MAX_ACCEPTED_FEE_PER_BYTE) || feeSat.greaterThan(MAX_ACCEPTED_FEE);
 }
 
 export function getMinimumPaymentSat(feeEstimateSat: Long) {
