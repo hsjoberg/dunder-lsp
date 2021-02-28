@@ -12,6 +12,20 @@ on-chain fee.
 
 More on how this works [here](https://github.com/hsjoberg/blixt-wallet/issues/242).
 
+## Dunder's API
+
+The API endpoints supplied by dunder LSP are:
+
+- /estimateFee - returns estimated fee (sats) and fee rate (sats per byte)
+
+- /getInfo - returns info from lnd - for details, see https://github.com/LN-Zap/node-lnd-grpc/blob/master/proto/0.12.0-beta/lnrpc/rpc.proto#L1567
+
+- /ondemand-channel
+    - /check-status - checks validity and sats claimable.
+    - /claim - asks dunder to push the clamiable amount (minus fees) into a new channel.
+    - /register - registers a blixt wallet with dunder. Necessary to use claim below.
+    - /service-status - returns status (boolean), minimum and maximum payment accepted, current fee estimate, and peer.
+
 ## Build
 
 Dunder requires lnd as the Lightning backend right now, though the plan is to
