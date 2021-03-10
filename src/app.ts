@@ -1,16 +1,17 @@
 import fastify, { FastifyServerOptions } from "fastify";
-import fastifyWebsocket from "fastify-websocket";
 import fastifyCors from "fastify-cors";
 import Long from "long";
 
 import { getInfo, estimateFee } from "./utils/lnd-api";
 import { getGrpcClients } from "./utils/grpc";
+import { assertEnvironment } from "./utils/common";
 
 const { lightning, router } = getGrpcClients();
 
+assertEnvironment();
+
 export default function (options?: FastifyServerOptions) {
   const app = fastify(options);
-  app.register(fastifyWebsocket, {});
   app.register(fastifyCors);
 
   app.get("/", async () => "hello, world");
@@ -21,8 +22,17 @@ export default function (options?: FastifyServerOptions) {
     router,
   });
 
-  app.get("/estimateFee", async function () {
-    return await estimateFee(lightning, Long.fromValue(100000), 1);
+  app.register(require("./services/admin/index"), {
+    prefix: "/admin",
+    lightning,
+    router,
+  });
+
+  app.get<{
+    Querystring: { targetConf?: string };
+  }>("/estimateFee", async function (request) {
+    console.log(+(request.query.targetConf ?? 1), typeof request.query.targetConf);
+    return await estimateFee(lightning, Long.fromValue(100000), +(request.query.targetConf ?? 1));
   });
 
   app.get("/getInfo", async function () {

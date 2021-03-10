@@ -148,7 +148,7 @@ export default function Register(
     }
 
     // Generate a channelId and register the channel request to the database.
-    // We will use this datase entry later on to check incoming HTLCs.
+    // We will use this database entry later on to check incoming HTLCs.
     const channelId = Long.fromValue(await generateShortChannelId());
     await createChannelRequest(db, {
       channelId: channelId.toString(),

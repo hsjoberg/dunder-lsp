@@ -27,3 +27,9 @@ CREATE TABLE htlcSettlement (
   CHECK (settled IN (0, 1)),
   CHECK (claimed IN (0, 1))
 );
+
+
+CREATE TABLE admin (
+  pubkey TEXT PRIMARY KEY,
+  name TEXT NOT NULL
+);
