@@ -21,3 +21,13 @@ export default async function getDb(forceReopen: boolean = false) {
 
   return db;
 }
+
+export async function beginTransaction(db: Database) {
+  await db.run("BEGIN TRANSACTION");
+  return;
+}
+
+export async function commit(db: Database) {
+  await db.run("COMMIT");
+  return;
+}

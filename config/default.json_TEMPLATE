@@ -1,10 +1,11 @@
 {
   "env": "development",
   "serverHost": "0.0.0.0:8080",
-  "backend": "lnd",
+  "serverDomain": "https://domain.com",
   "htlcWaitMs": 50,
   "minimumPaymentMultiplier": 5,
   "maximumPaymentSat": 1000000,
+  "backend": "lnd",
   "backendConfig": {
     "lndNode": "127.0.0.1:9735",
     "grpcServer": "127.0.0.1:10009",

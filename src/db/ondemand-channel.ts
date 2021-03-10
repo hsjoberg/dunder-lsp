@@ -56,8 +56,8 @@ export async function createChannelRequest(
         $channelId,
         $pubkey,
         $preimage,
-        $status,
         $start,
+        $status,
         $expire,
         $expectedAmountSat,
         $channelPoint

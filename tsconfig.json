@@ -66,5 +66,13 @@
     "skipLibCheck": true /* Skip type checking of declaration files. */,
     "forceConsistentCasingInFileNames": true /* Disallow inconsistently-cased references to the same file. */
   },
-  "exclude": ["dist", "tests", "mocks", "coverage", "./*.js"]
+  "exclude": [
+    "dist",
+    "tests",
+    "mocks",
+    "coverage",
+    "./*.js",
+    "src/services/admin/react-admin",
+    "scripts"
+  ]
 }
