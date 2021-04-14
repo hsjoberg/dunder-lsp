@@ -127,3 +127,14 @@ export async function checkPeerConnected(lightning: Client, pubkey: string) {
 
   return !!seekPeer;
 }
+
+export async function pendingChannels(lightning: Client) {
+  const getInfoRequest = lnrpc.PendingChannelsRequest.encode({}).finish();
+  const response = await grpcMakeUnaryRequest<lnrpc.PendingChannelsResponse>(
+    lightning,
+    "/lnrpc.Lightning/PendingChannels",
+    getInfoRequest,
+    lnrpc.PendingChannelsResponse.decode,
+  );
+  return response;
+}

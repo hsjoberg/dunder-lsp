@@ -52,7 +52,7 @@ const AdminHtlcSettlements = async function (app, { lightning, router }) {
       (htlcSettlement) => {
         return {
           ...htlcSettlement,
-          id: `${htlcSettlement.channelId + htlcSettlement.htlcId}`,
+          id: `${htlcSettlement.channelId}-${htlcSettlement.incomingChannelId}-${htlcSettlement.htlcId}`,
           claimed: !!htlcSettlement.claimed,
           settled: !!htlcSettlement.settled,
         };
@@ -62,6 +62,7 @@ const AdminHtlcSettlements = async function (app, { lightning, router }) {
     return htlcSettlements;
   });
 
+  // TODO htlcId/Id looks weird
   app.get<{
     Params: {
       htlcId: string;
@@ -78,7 +79,7 @@ const AdminHtlcSettlements = async function (app, { lightning, router }) {
     const htlcSettlements = (await getHtlcSettlements(db, htlcId)).map((htlcSettlement) => {
       return {
         ...htlcSettlement,
-        id: `${htlcSettlement.channelId + htlcSettlement.htlcId}`,
+        id: `${htlcSettlement.channelId}-${htlcSettlement.incomingChannelId}-${htlcSettlement.htlcId}`,
         claimed: !!htlcSettlement.claimed,
         settled: !!htlcSettlement.settled,
       };

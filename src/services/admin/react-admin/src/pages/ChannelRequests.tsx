@@ -18,6 +18,7 @@ import {
 } from "react-admin";
 import { useMediaQuery, Chip, makeStyles, Link } from "@material-ui/core";
 import { formatISO } from "date-fns";
+import { channelPointField } from "../common/ChannelPointField";
 
 const ChannelRequestTitle: React.FunctionComponent = ({ record }: any) => {
   return <span>Channel Request {record ? `${record.channelId}` : ""}</span>;
@@ -120,14 +121,4 @@ export const ChannelRequestShow: React.FunctionComponent = (props) => {
       </Show>
     </>
   );
-};
-
-const channelPointField = function (channelPoint: any) {
-  if (!channelPoint) {
-    return <>N/A</>;
-  }
-
-  const tx = channelPoint.split(":")[0];
-
-  return <Link href={`http://mempool.space/tx/${tx}`}>{channelPoint}</Link>;
 };

@@ -6,6 +6,7 @@ import Login from "./login";
 import AdminChannelRequests from "./channel-requests";
 import AdminHtlcSettlements from "./htlc-settlements";
 import AdminAdmin from "./admin";
+import AdminPendingChannels from "./pending-channels";
 
 export interface IErrorResponse {
   status: "ERROR";
@@ -19,6 +20,7 @@ const AdminApi = async function (app, { lightning, router }) {
   app.register(AdminAdmin);
   app.register(AdminChannelRequests);
   app.register(AdminHtlcSettlements);
+  app.register(AdminPendingChannels, { lightning, router });
 
   app.get("/logout", async (request) => {
     request.sessionStore.destroy(request.session.sessionId, (error) => console.error(error));

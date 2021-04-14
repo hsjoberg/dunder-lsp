@@ -20,6 +20,7 @@ export interface IChannelRequestDB {
 
 export interface IHtlcSettlementDB {
   channelId: string;
+  incomingChannelId: number;
   htlcId: number;
   amountSat: number;
   settled: number;
@@ -136,12 +137,13 @@ export async function getChannelRequestUnclaimedAmount(db: Database, pubkey: str
 
 export async function createHtlcSettlement(
   db: Database,
-  { channelId, htlcId, amountSat, settled, claimed }: IHtlcSettlementDB,
+  { channelId, htlcId, incomingChannelId, amountSat, settled, claimed }: IHtlcSettlementDB,
 ) {
   await db.run(
     `INSERT INTO htlcSettlement
       (
         channelId,
+        incomingChannelId,
         htlcId,
         amountSat,
         settled,
@@ -150,6 +152,7 @@ export async function createHtlcSettlement(
     VALUES
       (
         $channelId,
+        $incomingChannelId,
         $htlcId,
         $amountSat,
         $settled,
@@ -158,6 +161,7 @@ export async function createHtlcSettlement(
     `,
     {
       $channelId: channelId,
+      $incomingChannelId: incomingChannelId,
       $htlcId: htlcId,
       $amountSat: amountSat,
       $settled: settled,
@@ -166,11 +170,17 @@ export async function createHtlcSettlement(
   );
 }
 
-export async function getHtlcSettlement(db: Database, channelId: string, htlcId: number) {
+export async function getHtlcSettlement(
+  db: Database,
+  channelId: string,
+  incomingChannelId: number,
+  htlcId: number,
+) {
   return db.get<IHtlcSettlementDB>(
-    `SELECT * FROM htlcSettlement WHERE channelId = $channelId and htlcId = $htlcId`,
+    `SELECT * FROM htlcSettlement WHERE channelId = $channelId AND incomingChannelId = $incomingChannelId AND htlcId = $htlcId`,
     {
       $channelId: channelId,
+      $incomingChannelId: incomingChannelId,
       $htlcId: htlcId,
     },
   );
@@ -185,19 +195,20 @@ export async function getHtlcSettlements(db: Database, channelId: string) {
 
 export async function updateHtlcSettlement(
   db: Database,
-  { channelId, htlcId, amountSat, settled, claimed }: IHtlcSettlementDB,
+  { channelId, incomingChannelId, htlcId, amountSat, settled, claimed }: IHtlcSettlementDB,
 ) {
   await db.run(
     `UPDATE htlcSettlement
     SET   amountSat = $amountSat,
           settled = $settled,
           claimed = $claimed
-    WHERE channelId = $channelId AND htlcId = $htlcId`,
+    WHERE channelId = $channelId AND incomingChannelId = $incomingChannelId AND htlcId = $htlcId`,
     {
       $amountSat: amountSat,
       $settled: settled,
       $claimed: claimed,
       $channelId: channelId,
+      $incomingChannelId: incomingChannelId,
       $htlcId: htlcId,
     },
   );

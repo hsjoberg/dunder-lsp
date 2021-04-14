@@ -13,6 +13,7 @@ import Dashboard from "./dashboard/Dashboard";
 import { ChannelRequestList, ChannelRequestShow } from "./pages/ChannelRequests";
 import { HtlcSettlementList, HtlcSettlementShow } from "./pages/HtlcSettlements";
 import { AdminCreate, AdminEdit, AdminList } from "./pages/Admins";
+import { PendingChannelList } from "./pages/PendingChannels";
 
 const App = () => {
   const prefersDarkMode = useMediaQuery<typeof theme>("(prefers-color-scheme: dark)");
@@ -56,6 +57,14 @@ const App = () => {
         name="htlcSettlements"
         list={HtlcSettlementList}
         show={HtlcSettlementShow}
+      />
+      <Resource
+        icon={Person}
+        options={{
+          label: "Pending Channels",
+        }}
+        name="pendingChannels"
+        list={PendingChannelList}
       />
       <Resource
         icon={Person}

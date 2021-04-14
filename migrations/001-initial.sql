@@ -17,12 +17,13 @@ CREATE INDEX index_channelRequest_pubkey ON channelRequest(pubkey);
 
 CREATE TABLE htlcSettlement (
   channelId TEXT NOT NULL,
+  incomingChannelId INTEGER NOT NULL,
   htlcId INTEGER NOT NULL,
   amountSat INTEGER NOT NULL,
   settled BOOLEAN NOT NULL,
   claimed BOOLEAN NOT NULL,
 
-  PRIMARY KEY (channelId, htlcId),
+  PRIMARY KEY (channelId, incomingChannelId, htlcId),
   FOREIGN KEY (channelId) REFERENCES channelRequest(channelId),
   CHECK (settled IN (0, 1)),
   CHECK (claimed IN (0, 1))

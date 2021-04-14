@@ -149,7 +149,16 @@ export default function Register(
 
     // Generate a channelId and register the channel request to the database.
     // We will use this database entry later on to check incoming HTLCs.
-    const channelId = Long.fromValue(await generateShortChannelId());
+    const channelId = await (async function generateShortId(): Promise<Long> {
+      const shortId = Long.fromValue(await generateShortChannelId());
+
+      if (await getChannelRequest(db, shortId.toString())) {
+        console.log("Short id exists. Trying again");
+        return await generateShortId();
+      }
+      return shortId;
+    })();
+
     await createChannelRequest(db, {
       channelId: channelId.toString(),
       pubkey: registerRequest.pubkey,
@@ -182,6 +191,7 @@ interface HtlcHodl {
   [key: string]: {
     stream: ClientDuplexStream<any, any>;
     pubkey: string;
+    incomingChannelId: Long;
     htlcId: Long;
     incomingCircuitKey: routerrpc.ICircuitKey;
     amountMsat: Long;
@@ -215,6 +225,8 @@ const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
     console.log("incomingCircuitKey.chanId", request.incomingCircuitKey?.chanId?.toString());
     console.log("incomingCircuitKey.htlcId", request.incomingCircuitKey?.htlcId?.toString());
     console.log("outgoingAmountMsat.request.outgoingExpiry", request.outgoingExpiry.toString());
+    console.log("customRecords", JSON.stringify(request.customRecords));
+    console.log("onionBlob", JSON.stringify(request.onionBlob));
 
     // Check if this HTLC outgoing channel Id is related to a channel request
     // If it's not we'll resume the normal HTLC forwarding
@@ -236,6 +248,7 @@ const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
       await getHtlcSettlement(
         db,
         request.outgoingRequestedChanId?.toString(),
+        request.incomingCircuitKey?.chanId?.toNumber() ?? 0,
         request.incomingCircuitKey?.htlcId?.toNumber() ?? 0,
       )
     ) {
@@ -322,7 +335,8 @@ const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
     // in another interceptHtlc event.
     interceptedHtlcHodl[channelId].push({
       amountMsat: request.outgoingAmountMsat,
-      htlcId: request.incomingCircuitKey?.htlcId ?? Long.fromValue(0), // TODO
+      incomingChannelId: request.incomingCircuitKey?.chanId ?? Long.fromValue(0),
+      htlcId: request.incomingCircuitKey?.htlcId ?? Long.fromValue(0),
       incomingCircuitKey: request.incomingCircuitKey!,
       pubkey: channelRequest.pubkey,
       stream,
@@ -356,6 +370,7 @@ const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
         // acknowledge the settlement.
         await createHtlcSettlement(db, {
           channelId: request.outgoingRequestedChanId.toString(),
+          incomingChannelId: hodl.incomingChannelId.toNumber(),
           htlcId: hodl.htlcId.toNumber(),
           amountSat: hodl.amountMsat.div(MSAT).toNumber(),
           settled: 0,
@@ -388,6 +403,7 @@ async function openChannelWhenHtlcsSettled(
 ) {
   const channelId = channelRequest.channelId;
   const start = new Date();
+  const maximumPaymentSat = getMaximumPaymentSat();
   while (true) {
     const result = await checkAllHtclSettlementsSettled(db, channelId);
     if (!result) {
@@ -426,14 +442,21 @@ async function openChannelWhenHtlcsSettled(
         break;
       }
 
+      // TODO check if peer online
+      if (!(await checkPeerConnected(lightning, channelRequest.pubkey))) {
+        console.error("Peer not online");
+      }
+
       console.log("Opening channel");
       try {
         // Attempt to open a channel with the requesting party
+        const localFunding = Long.fromValue(maximumPaymentSat).sub(partTotal.div(MSAT));
+        const pushAmount = partTotal.div(MSAT);
         const result = await openChannelSync(
           lightning,
           channelRequest.pubkey,
-          partTotal.div(MSAT).mul(2),
-          partTotal.div(MSAT),
+          localFunding,
+          pushAmount,
           true,
           true,
         );
@@ -469,30 +492,36 @@ const subscribeHtlc = (db: Database, router: Client) => {
     const htlcEvent = routerrpc.HtlcEvent.decode(data);
     console.log("event", htlcEvent.event);
     console.log("incomingHtlcId", htlcEvent.incomingHtlcId.toString());
-    const outgoingChannelId = htlcEvent.outgoingChannelId;
-    const incomingHtlcId = htlcEvent.incomingHtlcId;
+
     if (!htlcEvent.settleEvent) {
       return;
     }
-    const hodl = interceptedHtlcHodl[outgoingChannelId.toString()]?.find(({ htlcId }) => {
-      return incomingHtlcId.equals(htlcId);
+    const hodl = interceptedHtlcHodl[htlcEvent.outgoingChannelId.toString()]?.find(({ incomingChannelId, htlcId }) => {
+      return (
+        htlcEvent.incomingChannelId.equals(incomingChannelId)
+        &&
+        htlcEvent.incomingHtlcId.equals(htlcId)
+      );
     });
     if (!hodl) {
-      console.log("Could not find part HTLC", incomingHtlcId.toString());
+      console.log(`Could not find part HTLC
+incomingChannelId=${htlcEvent.incomingChannelId.toString()}
+htlcId=${htlcEvent.incomingHtlcId.toString()}`);
       return;
     } else {
       hodl.settled = true;
     }
     const htlcSettlement = await getHtlcSettlement(
       db,
-      outgoingChannelId.toString(),
-      incomingHtlcId.toNumber(),
+      htlcEvent.outgoingChannelId.toString(),
+      htlcEvent.incomingChannelId.toNumber(),
+      htlcEvent.incomingHtlcId.toNumber(),
     );
     if (!htlcSettlement) {
       console.error(
         `FATAL ERROR: Could not find htlcSettlement ` +
-          `(outgoingChannelId=${outgoingChannelId.toString()} ` +
-          `incomingHtlcId=${incomingHtlcId.toString()}) in database`,
+          `(outgoingChannelId=${htlcEvent.outgoingChannelId.toString()} ` +
+          `incomingHtlcId=${htlcEvent.incomingHtlcId.toString()}) in database`,
       );
       return;
     }

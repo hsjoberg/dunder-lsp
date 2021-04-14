@@ -1,12 +1,6 @@
 import { CSSProperties, useEffect, useState } from "react";
 import { useDataProvider, useVersion, Link } from "react-admin";
-import {
-  Card,
-  CardHeader,
-  CardContent,
-  Typography,
-  CircularProgress,
-} from "@material-ui/core";
+import { Card, CardHeader, CardContent, Typography, CircularProgress } from "@material-ui/core";
 import { format } from "date-fns";
 
 import ChannelRequestChart from "./ChannelRequestChart";
@@ -101,7 +95,7 @@ const Dashboard = () => {
         <CardHeader title="Welcome to Dunder administration" />
       </Card>
 
-      {noUnclaimedButSettledHtlcs && noUnclaimedButSettledHtlcs > 0 && (
+      {noUnclaimedButSettledHtlcs !== undefined && noUnclaimedButSettledHtlcs > 0 && (
         <div style={styles.flex}>
           <div style={styles.leftCol}>
             <Card>
