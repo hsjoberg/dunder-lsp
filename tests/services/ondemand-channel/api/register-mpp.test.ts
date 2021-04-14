@@ -23,7 +23,9 @@ describe("/ondemand-channel/register", () => {
     const pubkey = "abcdef12345";
     const signature = "validsig";
     const htlcPart = Long.fromValue(123);
+    const incomingChanId = Long.fromValue(1);
     const htlcPart2 = Long.fromValue(456);
+    const incomingChanId2 = Long.fromValue(2);
 
     const response = await sendRegisterRequest(app, {
       amountSat,
@@ -52,6 +54,7 @@ describe("/ondemand-channel/register", () => {
         amountSat / 2,
         registerResponse.fakeChannelId,
         paymentHash,
+        incomingChanId,
         htlcPart,
       ),
     );
@@ -62,6 +65,7 @@ describe("/ondemand-channel/register", () => {
         amountSat / 2,
         registerResponse.fakeChannelId,
         paymentHash,
+        incomingChanId2,
         htlcPart2,
       ),
     );
@@ -75,8 +79,9 @@ describe("/ondemand-channel/register", () => {
       routerrpc.HtlcEvent.encode({
         eventType: routerrpc.HtlcEvent.EventType.FORWARD,
         settleEvent: {},
-        outgoingChannelId: Long.fromValue(registerResponse.fakeChannelId),
+        incomingChannelId: incomingChanId,
         incomingHtlcId: htlcPart,
+        outgoingChannelId: Long.fromValue(registerResponse.fakeChannelId),
       }).finish(),
     );
     await timeout(100);
@@ -85,8 +90,9 @@ describe("/ondemand-channel/register", () => {
       routerrpc.HtlcEvent.encode({
         eventType: routerrpc.HtlcEvent.EventType.FORWARD,
         settleEvent: {},
-        outgoingChannelId: Long.fromValue(registerResponse.fakeChannelId),
+        incomingChannelId: incomingChanId2,
         incomingHtlcId: htlcPart2,
+        outgoingChannelId: Long.fromValue(registerResponse.fakeChannelId),
       }).finish(),
     );
 

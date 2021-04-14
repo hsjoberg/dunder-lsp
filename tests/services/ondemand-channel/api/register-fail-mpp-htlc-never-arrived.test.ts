@@ -22,7 +22,9 @@ describe("/ondemand-channel/register", () => {
     const paymentHash = sha256Buffer(preimage);
     const pubkey = "abcdef12345";
     const signature = "validsig";
+    const incomingChanId = Long.fromValue(1);
     const htlcPart = Long.fromValue(123);
+    const incomingChanId2 = Long.fromValue(2);
     const htlcPart2 = Long.fromValue(456);
 
     const response = await sendRegisterRequest(app, {
@@ -40,7 +42,7 @@ describe("/ondemand-channel/register", () => {
     // Replace the write function so we can spy on the response
     htlcInterceptorStream.write = (data: any) => {
       const r = routerrpc.ForwardHtlcInterceptResponse.decode(data);
-      if (r.incomingCircuitKey?.chanId?.eq(registerResponse.fakeChannelId)) {
+      if (r.incomingCircuitKey?.chanId?.eq(incomingChanId)) {
         forwardHtlcInterceptResponse?.push(r);
       }
       return true;
@@ -52,6 +54,7 @@ describe("/ondemand-channel/register", () => {
         amountSat / 2,
         registerResponse.fakeChannelId,
         paymentHash,
+        incomingChanId,
         htlcPart,
       ),
     );

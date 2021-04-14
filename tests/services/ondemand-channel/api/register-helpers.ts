@@ -29,12 +29,13 @@ export function createForwardHtlcInterceptRequest(
   amountSat: number,
   fakeChannelId: string,
   paymentHash: Uint8Array,
+  incomingChanId: Long,
   htlcPart: Long,
 ) {
   return routerrpc.ForwardHtlcInterceptRequest.encode({
     outgoingAmountMsat: Long.fromValue(amountSat).mul(MSAT),
     incomingCircuitKey: routerrpc.CircuitKey.create({
-      chanId: Long.fromValue(fakeChannelId),
+      chanId: incomingChanId,
       htlcId: htlcPart,
     }),
     paymentHash,
