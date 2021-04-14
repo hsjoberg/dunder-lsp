@@ -59,7 +59,6 @@ export default function Register(
   router: Client,
   servicePubkey: string,
 ): RouteHandlerMethod {
-  console.log(formatISO(new Date()));
   // Start the HTLC interception
   //
   // interceptHtlc is used to intercept an incoming HTLC and either accept
@@ -452,14 +451,25 @@ async function openChannelWhenHtlcsSettled(
         // Attempt to open a channel with the requesting party
         const localFunding = Long.fromValue(maximumPaymentSat).sub(partTotal.div(MSAT));
         const pushAmount = partTotal.div(MSAT);
-        const result = await openChannelSync(
-          lightning,
-          channelRequest.pubkey,
-          localFunding,
-          pushAmount,
-          true,
-          true,
-        );
+        const result = await (async () => {
+          let attempt = 3;
+          while (attempt--) {
+            try {
+              return await openChannelSync(
+                lightning,
+                channelRequest.pubkey,
+                localFunding,
+                pushAmount,
+                true,
+                true,
+              );
+            } catch (e) {
+              console.error("Failed to openChannel", e.message);
+              await timeout(5000);
+            }
+          }
+          throw new Error("Could not open channel");
+        })();
         const txId = bytesToHexString(result.fundingTxidBytes.reverse());
 
         // Once we've opened a channel, we mark the channel request as completed
@@ -496,13 +506,14 @@ const subscribeHtlc = (db: Database, router: Client) => {
     if (!htlcEvent.settleEvent) {
       return;
     }
-    const hodl = interceptedHtlcHodl[htlcEvent.outgoingChannelId.toString()]?.find(({ incomingChannelId, htlcId }) => {
-      return (
-        htlcEvent.incomingChannelId.equals(incomingChannelId)
-        &&
-        htlcEvent.incomingHtlcId.equals(htlcId)
-      );
-    });
+    const hodl = interceptedHtlcHodl[htlcEvent.outgoingChannelId.toString()]?.find(
+      ({ incomingChannelId, htlcId }) => {
+        return (
+          htlcEvent.incomingChannelId.equals(incomingChannelId) &&
+          htlcEvent.incomingHtlcId.equals(htlcId)
+        );
+      },
+    );
     if (!hodl) {
       console.log(`Could not find part HTLC
 incomingChannelId=${htlcEvent.incomingChannelId.toString()}

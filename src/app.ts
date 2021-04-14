@@ -31,7 +31,7 @@ export default function (options?: FastifyServerOptions) {
   app.get<{
     Querystring: { targetConf?: string };
   }>("/estimateFee", async function (request) {
-    console.log(+(request.query.targetConf ?? 1), typeof request.query.targetConf);
+    console.log("estimateFee", +(request.query.targetConf ?? 1), typeof request.query.targetConf);
     return await estimateFee(lightning, Long.fromValue(100000), +(request.query.targetConf ?? 1));
   });
 
