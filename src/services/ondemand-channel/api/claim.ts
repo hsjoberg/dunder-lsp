@@ -5,7 +5,7 @@ import Long from "long";
 
 import {
   getChannelRequestUnclaimedAmount,
-  updateChannelRequest,
+  updateChannelRequestSetAllRegisteredAsDone,
   updateHtlcSettlementSetAllAsClaimed,
 } from "../../../db/ondemand-channel";
 import { checkPeerConnected, openChannelSync, verifyMessage } from "../../../utils/lnd-api";
@@ -79,6 +79,11 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
         true,
       );
       const txId = bytesToHexString(result.fundingTxidBytes.reverse());
+      await updateChannelRequestSetAllRegisteredAsDone(
+        db,
+        claimRequest.pubkey,
+        `${txId}:${result.outputIndex}`,
+      );
       await updateHtlcSettlementSetAllAsClaimed(db, claimRequest.pubkey);
     } catch (error) {
       console.error("Could not open channel", error);

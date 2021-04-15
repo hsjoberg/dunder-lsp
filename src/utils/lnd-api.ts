@@ -138,3 +138,15 @@ export async function pendingChannels(lightning: Client) {
   );
   return response;
 }
+
+export function subscribePeerEvents(lightning: Client) {
+  const request = lnrpc.PeerEventSubscription.encode({}).finish();
+  return lightning.makeServerStreamRequest(
+    "/lnrpc.Lightning/SubscribePeerEvents",
+    (arg: any) => arg,
+    (arg) => arg,
+    request,
+    new Metadata(),
+    undefined,
+  );
+}

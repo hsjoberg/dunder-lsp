@@ -5,6 +5,7 @@ import { getInfo } from "../../utils/lnd-api";
 import Register from "./api/register";
 import ServiceStatus from "./api/service-status";
 import CheckStatus from "./api/check-status";
+import AutoHeal from "./api/misc/auto-heal";
 import Claim from "./api/claim";
 import getDb from "../../db/db";
 
@@ -22,6 +23,8 @@ const OnDemandChannel = async function (app, { lightning, router }) {
   app.post("/register", Register(db, lightning, router, servicePubKey));
   app.post("/check-status", CheckStatus(db, lightning));
   app.post("/claim", Claim(db, lightning));
+
+  AutoHeal(db, lightning, router);
 } as FastifyPluginAsync<{ lightning: Client; router: Client }>;
 
 export default OnDemandChannel;

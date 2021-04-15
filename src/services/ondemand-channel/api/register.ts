@@ -448,7 +448,7 @@ async function openChannelWhenHtlcsSettled(
       console.log("Opening channel");
       try {
         // Attempt to open a channel with the requesting party
-        const localFunding = Long.fromValue(maximumPaymentSat).sub(partTotal.div(MSAT));
+        const localFunding = Long.fromValue(maximumPaymentSat);
         const pushAmount = partTotal.div(MSAT);
         const result = await (async () => {
           let attempt = 3;

@@ -107,6 +107,24 @@ export async function updateChannelRequest(
   );
 }
 
+export async function updateChannelRequestSetAllRegisteredAsDone(
+  db: Database,
+  pubkey: string,
+  channelPoint: string,
+) {
+  await db.run(
+    `UPDATE channelRequest
+    SET channelPoint = $channelPoint, status = $statusDone
+    WHERE status = $statusRegistered AND pubkey = $pubkey`,
+    {
+      $channelPoint: channelPoint,
+      $statusDone: "DONE",
+      $statusRegistered: "REGISTERED",
+      $pubkey: pubkey,
+    },
+  );
+}
+
 export function getActiveChannelRequestsByPubkey(db: Database, pubkey: string) {
   return db.all<IChannelRequestDB[]>(`SELECT * FROM channelRequest WHERE $pubkey = pubkey`, {
     $pubkey: pubkey,
@@ -126,10 +144,11 @@ export async function getChannelRequestUnclaimedAmount(db: Database, pubkey: str
     JOIN channelRequest
       ON  channelRequest.channelId = htlcSettlement.channelId
       AND channelRequest.pubkey = $pubkey
-    WHERE htlcSettlement.claimed = $claimed`,
+    WHERE htlcSettlement.settled = $settled AND htlcSettlement.claimed = $claimed`,
     {
       $pubkey: pubkey,
-      $claimed: 1,
+      $settled: 1,
+      $claimed: 0,
     },
   );
   return result?.amountSat ?? 0;
@@ -218,8 +237,13 @@ export async function updateHtlcSettlementSetAllAsClaimed(db: Database, pubkey: 
   await db.run(
     `UPDATE htlcSettlement
     SET claimed = $claimed
-    JOIN  channelRequest ON channelRequest.channelId = htlcSettlement.channelId
-    AND   channelRequest.pubkey = $pubkey`,
+    WHERE
+      settled = 1 AND
+      EXISTS (
+        SELECT channelRequest.pubkey
+        FROM channelRequest
+        WHERE channelRequest.pubkey = $pubkey AND channelRequest.channelId = htlcSettlement.channelId
+      )`,
     {
       $pubkey: pubkey,
       $claimed: 1,
@@ -231,7 +255,7 @@ export async function updateHtlcSettlementByChannelIdSetAsClaimed(db: Database, 
   await db.run(
     `UPDATE htlcSettlement
     SET claimed = $claimed
-    WHERE channelId = $channelId`,
+    WHERE channelId = $channelId and settled = 1`,
     {
       $channelId: channelId,
       $claimed: 1,
