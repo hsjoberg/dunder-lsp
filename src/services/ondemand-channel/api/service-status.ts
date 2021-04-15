@@ -20,8 +20,10 @@ export default function ServiceStatus(
 ): RouteHandlerMethod {
   const lndNode = config.get<string>("backendConfig.lndNode");
   return async function () {
-    const estimateFeeResponse = await estimateFee(lightning, Long.fromValue(100000), 1);
+    // The maximum payment we'll accept
+    const maximumPaymentSat = getMaximumPaymentSat();
 
+    const estimateFeeResponse = await estimateFee(lightning, Long.fromValue(maximumPaymentSat), 1);
     // Close down the service if fees are too high
     const status = !checkFeeTooHigh(
       estimateFeeResponse.feerateSatPerByte,
@@ -30,9 +32,6 @@ export default function ServiceStatus(
 
     // The miminum payment we'll accept
     const minimumPaymentSat = getMinimumPaymentSat(estimateFeeResponse.feeSat);
-
-    // The maximum payment we'll accept
-    const maximumPaymentSat = getMaximumPaymentSat();
 
     const response: IServiceStatusResponse = {
       status,

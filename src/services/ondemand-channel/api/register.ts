@@ -90,9 +90,21 @@ export default function Register(
       return error;
     }
 
+    // The maximum payment we'll accept
+    // Configurable via the maximumPaymentSat config
+    const maximumPaymentSat = getMaximumPaymentSat();
+    if (registerRequest.amountSat > maximumPaymentSat) {
+      reply.code(400);
+      const error: IErrorResponse = {
+        status: "ERROR",
+        reason: `The requested invoice is above the maximum limit of ${maximumPaymentSat} satoshi`,
+      };
+      return error;
+    }
+
     // Check if onchain fee is too high.
     // Dunder will cease to operate once the fees reach a certain threshold.
-    const estimateFeeResponse = await estimateFee(lightning, Long.fromValue(100000), 1);
+    const estimateFeeResponse = await estimateFee(lightning, Long.fromValue(maximumPaymentSat), 1);
     const feesTooHigh = checkFeeTooHigh(
       estimateFeeResponse.feerateSatPerByte,
       estimateFeeResponse.feeSat,
@@ -119,18 +131,6 @@ export default function Register(
       const error: IErrorResponse = {
         status: "ERROR",
         reason: `The requested invoice is below the minimum requirement of ${minimumPaymentSat.toString()} satoshi`,
-      };
-      return error;
-    }
-
-    // The maximum payment we'll accept
-    // Configurable via the maximumPaymentSat config
-    const maximumPaymentSat = getMaximumPaymentSat();
-    if (registerRequest.amountSat > maximumPaymentSat) {
-      reply.code(400);
-      const error: IErrorResponse = {
-        status: "ERROR",
-        reason: `The requested invoice is above the maximum limit of ${maximumPaymentSat} satoshi`,
       };
       return error;
     }
@@ -225,7 +225,6 @@ const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
     console.log("incomingCircuitKey.htlcId", request.incomingCircuitKey?.htlcId?.toString());
     console.log("outgoingAmountMsat.request.outgoingExpiry", request.outgoingExpiry.toString());
     console.log("customRecords", JSON.stringify(request.customRecords));
-    console.log("onionBlob", JSON.stringify(request.onionBlob));
 
     // Check if this HTLC outgoing channel Id is related to a channel request
     // If it's not we'll resume the normal HTLC forwarding
