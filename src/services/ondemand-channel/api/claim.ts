@@ -52,7 +52,7 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
 
     const unclaimed = await getChannelRequestUnclaimedAmount(db, claimRequest.pubkey);
 
-    if (MIN_CHANNEL_SIZE_SAT <= unclaimed) {
+    if (unclaimed <= MIN_CHANNEL_SIZE_SAT) {
       reply.code(400);
       const error: IErrorResponse = {
         status: "ERROR",
