@@ -16,7 +16,7 @@
   "license": "MIT",
   "dependencies": {
     "@grpc/grpc-js": "^1.2.12",
-    "@grpc/proto-loader": "^0.6.0",
+    "@grpc/proto-loader": "^0.6.1",
     "bech32": "2.0.0",
     "config": "^3.3.6",
     "date-fns": "^2.21.0",
@@ -38,7 +38,8 @@
   },
   "devDependencies": {
     "@types/config": "^0.0.38",
-    "@types/node": "^14.14.37",
+    "@types/jest": "^26.0.22",
+    "@types/node": "^14.14.39",
     "@types/secp256k1": "^4.0.2",
     "@types/sqlstring": "^2.3.0",
     "jest": "^26.6.3",
