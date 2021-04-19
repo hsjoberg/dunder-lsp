@@ -84,6 +84,7 @@ export function assertEnvironment() {
   config.get("fee");
   config.get("fee.maxSat");
   config.get("fee.maxSatPerVByte");
+  config.get("fee.subsidyFactor");
   config.get("backend");
   config.get("backendConfig.lndNode");
   config.get("backendConfig.grpcServer");

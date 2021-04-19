@@ -22,6 +22,7 @@ export default function ServiceStatus(
   return async function () {
     // The maximum payment we'll accept
     const maximumPaymentSat = getMaximumPaymentSat();
+    const feeSubsidyFactor = config.get<number>("fee.subsidyFactor");
 
     const estimateFeeResponse = await estimateFee(lightning, Long.fromValue(maximumPaymentSat), 1);
     // Close down the service if fees are too high
@@ -33,9 +34,13 @@ export default function ServiceStatus(
     // The miminum payment we'll accept
     const minimumPaymentSat = getMinimumPaymentSat(estimateFeeResponse.feeSat);
 
+    // Approx fee
+    const estimatedFee = estimateFeeResponse.feeSat;
+    const estimatedFeeSubsidized = estimatedFee.mul(feeSubsidyFactor);
+
     const response: IServiceStatusResponse = {
       status,
-      approxFeeSat: estimateFeeResponse.feeSat.toNumber(),
+      approxFeeSat: estimatedFeeSubsidized.toNumber(),
       minimumPaymentSat,
       maximumPaymentSat,
       peer: `${servicePubKey}@${lndNode}`,

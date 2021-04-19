@@ -15,7 +15,7 @@ describe("/ondemand-channel/register", () => {
   test("registers and opens a channel when the HTLC are settled (non-MPP)", async (done) => {
     const app = build();
 
-    const amountSat = 10000;
+    const amountSat = 20000;
     const preimage = new Uint8Array([0]);
     const paymentHash = sha256Buffer(preimage);
     const pubkey = "abcdef12345";

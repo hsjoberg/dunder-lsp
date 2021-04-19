@@ -8,6 +8,7 @@
   "fee": {
     "maxSat": 40000,
     "maxSatPerVByte": 200,
+    "subsidyFactor": 1
   },
   "backend": "lnd",
   "backendConfig": {

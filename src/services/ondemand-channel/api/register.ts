@@ -91,7 +91,6 @@ export default function Register(
     }
 
     // The maximum payment we'll accept
-    // Configurable via the maximumPaymentSat config
     const maximumPaymentSat = getMaximumPaymentSat();
     if (registerRequest.amountSat > maximumPaymentSat) {
       reply.code(400);
@@ -137,8 +136,7 @@ export default function Register(
     //
     // A channel opening can also not be lower than the default minimum requirement by lnd.
     const minimumPaymentSat = getMinimumPaymentSat(estimateFeeResponse.feeSat);
-    if (registerRequest.amountSat < 1 || minimumPaymentSat - 10000 > registerRequest.amountSat) {
-      // ^ TODO
+    if (registerRequest.amountSat < 1 || registerRequest.amountSat < minimumPaymentSat) {
       reply.code(400);
       const error: IErrorResponse = {
         status: "ERROR",
@@ -225,6 +223,7 @@ const interceptedHtlcHodl: HtlcHodl = {};
  */
 const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
   const htlcWaitMs = config.get<number>("htlcWaitMs");
+  const maximumPaymentSat = getMaximumPaymentSat();
   const stream = htlcInterceptor(router);
 
   stream.on("data", async (data) => {
@@ -243,12 +242,7 @@ const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
     const channelRequest = await getChannelRequest(db, request.outgoingRequestedChanId.toString());
     if (!channelRequest) {
       console.log("SKIPPING INCOMING HTLC");
-      stream.write(
-        routerrpc.ForwardHtlcInterceptResponse.encode({
-          action: routerrpc.ResolveHoldForwardAction.RESUME,
-          incomingCircuitKey: request.incomingCircuitKey,
-        }).finish(),
-      );
+      doActionHtlc(routerrpc.ResolveHoldForwardAction.RESUME, stream, request.incomingCircuitKey);
       return;
     }
 
@@ -263,11 +257,7 @@ const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
       )
     ) {
       console.error("WARNING, already found settlement in database");
-      const settleResponse = routerrpc.ForwardHtlcInterceptResponse.encode({
-        action: routerrpc.ResolveHoldForwardAction.FAIL,
-        incomingCircuitKey: request.incomingCircuitKey,
-      }).finish();
-      stream.write(settleResponse);
+      doActionHtlc(routerrpc.ResolveHoldForwardAction.FAIL, stream, request.incomingCircuitKey);
       return;
     }
 
@@ -279,51 +269,16 @@ const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
     if (bytesToHexString(request.paymentHash) !== paymentHash) {
       // TODO error handling
       console.error("Payment hash does not match");
-      const settleResponse = routerrpc.ForwardHtlcInterceptResponse.encode({
-        action: routerrpc.ResolveHoldForwardAction.FAIL,
-        incomingCircuitKey: request.incomingCircuitKey,
-      }).finish();
-      stream.write(settleResponse);
+      doActionHtlc(routerrpc.ResolveHoldForwardAction.FAIL, stream, request.incomingCircuitKey);
       return;
     }
-
-    // let feeResult: lnrpc.EstimateFeeResponse | undefined;
-    // try {
-    //   // Check whether we can still do this transaction
-    //   feeResult = await estimateFee(
-    //     lightning,
-    //     request.outgoingAmountMsat.div(MSAT).multiply(2),
-    //     1,
-    //   );
-    //   if (
-    //     request.outgoingAmountMsat
-    //       .subtract(feeResult.feeSat.mul(MSAT))
-    //       .lessThanOrEqual(20000 * MSAT)
-    //   ) {
-    //     throw new Error("Too high fee");
-    //   }
-    // } catch (e) {
-    //   // TODO error handling
-    //   console.error("estimateFee failed", e);
-    //   const settleResponse = routerrpc.ForwardHtlcInterceptResponse.encode({
-    //     action: routerrpc.ResolveHoldForwardAction.FAIL,
-    //     incomingCircuitKey: request.incomingCircuitKey,
-    //   }).finish();
-    //   stream.write(settleResponse);
-    //   return;
-    // }
-    // const estimatedFeeMsat = feeResult.feeSat.mul(MSAT);
 
     // Check if the requester is connected to our Lightning node.
     // If not, we'll fail this HTLC
     // TODO(hsjoberg): maybe this is too harsh
     if (!checkPeerConnected(lightning, channelRequest.pubkey)) {
       console.error("Wallet node not connected");
-      const settleResponse = routerrpc.ForwardHtlcInterceptResponse.encode({
-        action: routerrpc.ResolveHoldForwardAction.FAIL,
-        incomingCircuitKey: request.incomingCircuitKey,
-      }).finish();
-      stream.write(settleResponse);
+      doActionHtlc(routerrpc.ResolveHoldForwardAction.FAIL, stream, request.incomingCircuitKey);
       return;
     }
 
@@ -365,15 +320,45 @@ const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
     // We'll start the settling of HTLCs.
     if (total.equals(Long.fromValue(channelRequest.expectedAmountSat).mul(MSAT))) {
       console.log("Total adds up!");
+
+      // Calculate how much we will subtract for fees
+      let feeResult: lnrpc.EstimateFeeResponse | undefined;
+      try {
+        // Check whether we can still do this transaction
+        feeResult = await estimateFee(lightning, Long.fromValue(maximumPaymentSat), 1);
+        if (request.outgoingAmountMsat.subtract(feeResult.feeSat.mul(MSAT)).lessThanOrEqual(0)) {
+          console.log("Too high fee");
+          for (const hodl of interceptedHtlcHodl[channelId]) {
+            doActionHtlc(
+              routerrpc.ResolveHoldForwardAction.FAIL,
+              hodl.stream,
+              hodl.incomingCircuitKey,
+            );
+          }
+        }
+      } catch (e) {
+        // TODO error handling
+        console.error("estimateFee failed", e);
+        for (const hodl of interceptedHtlcHodl[channelId]) {
+          doActionHtlc(
+            routerrpc.ResolveHoldForwardAction.FAIL,
+            hodl.stream,
+            hodl.incomingCircuitKey,
+          );
+        }
+        return;
+      }
+      const estimatedFeeMsat = feeResult.feeSat.mul(MSAT);
+
       for (const hodl of interceptedHtlcHodl[channelId]) {
         console.log("Settling part HTLC", hodl.htlcId.toString());
         // Send settlement action to bidi-stream
-        const settleResponse = routerrpc.ForwardHtlcInterceptResponse.encode({
-          action: routerrpc.ResolveHoldForwardAction.SETTLE,
-          incomingCircuitKey: hodl.incomingCircuitKey,
-          preimage: hexToUint8Array(channelRequest.preimage),
-        }).finish();
-        stream.write(settleResponse);
+        doActionHtlc(
+          routerrpc.ResolveHoldForwardAction.SETTLE,
+          hodl.stream,
+          hodl.incomingCircuitKey,
+          channelRequest.preimage,
+        );
 
         // Create a settlement record in the database.
         // `settled` is set to 0 (false) here because we are waiting for `subscribeHtlc` to
@@ -397,6 +382,21 @@ const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
   });
 };
 
+const doActionHtlc = (
+  action: routerrpc.ResolveHoldForwardAction,
+  stream: ClientDuplexStream<any, any>,
+  incomingCircuitKey: routerrpc.ForwardHtlcInterceptRequest["incomingCircuitKey"],
+  preimage?: string,
+) => {
+  const settleResponse = routerrpc.ForwardHtlcInterceptResponse.encode({
+    action,
+    incomingCircuitKey,
+    preimage:
+      action === routerrpc.ResolveHoldForwardAction.SETTLE ? hexToUint8Array(preimage!) : undefined,
+  }).finish();
+  stream.write(settleResponse);
+};
+
 /**
  * openChannelWhenHtlcsSettled waits for HTLCs to be marked as settled in the database.
  * It is started by `interceptHtlc` when all incoming HTLCs has been registered and request
@@ -414,6 +414,7 @@ async function openChannelWhenHtlcsSettled(
   const channelId = channelRequest.channelId;
   const start = new Date();
   const maximumPaymentSat = getMaximumPaymentSat();
+  const feeSubsidyFactor = config.get<number>("fee.subsidyFactor");
 
   while (true) {
     const result = await checkAllHtclSettlementsSettled(db, channelId);
@@ -427,11 +428,11 @@ async function openChannelWhenHtlcsSettled(
         for (const hodl of interceptedHtlcHodl[channelId]) {
           if (!hodl.settled) {
             console.warn("Rejecting", hodl.htlcId.toString());
-            const settleResponse = routerrpc.ForwardHtlcInterceptResponse.encode({
-              action: routerrpc.ResolveHoldForwardAction.FAIL,
-              incomingCircuitKey: hodl.incomingCircuitKey,
-            }).finish();
-            hodl.stream.write(settleResponse);
+            doActionHtlc(
+              routerrpc.ResolveHoldForwardAction.FAIL,
+              hodl.stream,
+              hodl.incomingCircuitKey,
+            );
           }
         }
         delete interceptedHtlcHodl[channelId];
@@ -442,13 +443,13 @@ async function openChannelWhenHtlcsSettled(
       await timeout(1000);
     } else {
       // Count that all part HTLCs matches up with the total expected amount
-      const partTotal = interceptedHtlcHodl[channelId].reduce((prev, { amountMsat }) => {
+      const partTotalMsat = interceptedHtlcHodl[channelId].reduce((prev, { amountMsat }) => {
         return prev.add(amountMsat);
       }, Long.fromValue(0));
 
       // Make sure all part HTLCs match up with the expected amount.
       // Fail it this isn't the case. This should never happen.
-      if (partTotal.div(MSAT).notEquals(channelRequest.expectedAmountSat)) {
+      if (partTotalMsat.div(MSAT).notEquals(channelRequest.expectedAmountSat)) {
         console.error("FATAL ERROR: Total part HTLC amount mismatch with expected total amount");
         break;
       }
@@ -460,9 +461,24 @@ async function openChannelWhenHtlcsSettled(
 
       console.log("Opening channel");
       try {
+        // Calculate how much we will subtract for fees
+        let feeResult: lnrpc.EstimateFeeResponse | undefined;
+        try {
+          // Check whether we can still do this transaction
+          feeResult = await estimateFee(lightning, Long.fromValue(maximumPaymentSat), 1);
+          if (partTotalMsat.subtract(feeResult.feeSat.mul(MSAT)).lessThanOrEqual(0)) {
+            throw new Error("Too high fee");
+          }
+        } catch (e) {
+          console.error("estimateFee failed");
+          throw e;
+        }
+        const estimatedFeeMsat = feeResult.feeSat.mul(MSAT);
+        const estimatedFeeMsatSubsidized = estimatedFeeMsat.mul(feeSubsidyFactor);
+
         // Attempt to open a channel with the requesting party
         const localFunding = Long.fromValue(maximumPaymentSat);
-        const pushAmount = partTotal.div(MSAT);
+        const pushAmount = partTotalMsat.subtract(estimatedFeeMsatSubsidized).div(MSAT);
         const result = await (async () => {
           let attempt = 3;
           while (attempt--) {

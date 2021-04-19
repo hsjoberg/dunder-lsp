@@ -16,7 +16,7 @@ describe("/ondemand-channel/register", () => {
     openChannelSync.mockClear();
     const app = build();
 
-    const amountSat = 10000;
+    const amountSat = 20000;
     const preimage = new Uint8Array([3]);
     const invalidPreimage = new Uint8Array([4]);
     const paymentHash = sha256Buffer(preimage);

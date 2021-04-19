@@ -24,7 +24,7 @@ describe("/ondemand-channel/register", () => {
       return false;
     });
 
-    const amountSat = 10000;
+    const amountSat = 20000;
     const preimage = new Uint8Array([5]);
     const paymentHash = sha256Buffer(preimage);
     const pubkey = "abcdef12345";
