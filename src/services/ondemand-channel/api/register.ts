@@ -5,7 +5,7 @@ import Long from "long";
 import { Database } from "sqlite";
 import config from "config";
 
-import { routerrpc } from "../../../proto";
+import { lnrpc, routerrpc } from "../../../proto";
 import { MSAT } from "../../../utils/constants";
 import {
   checkAllHtclSettlementsSettled,
@@ -104,7 +104,18 @@ export default function Register(
 
     // Check if onchain fee is too high.
     // Dunder will cease to operate once the fees reach a certain threshold.
-    const estimateFeeResponse = await estimateFee(lightning, Long.fromValue(maximumPaymentSat), 1);
+    let estimateFeeResponse: lnrpc.EstimateFeeResponse;
+    try {
+      estimateFeeResponse = await estimateFee(lightning, Long.fromValue(maximumPaymentSat), 1);
+    } catch (e) {
+      // If we don't have enough funds we'll get here
+      const error: IErrorResponse = {
+        status: "ERROR",
+        reason: "Dunder is temporarily offline.",
+      };
+      return error;
+    }
+
     const feesTooHigh = checkFeeTooHigh(
       estimateFeeResponse.feerateSatPerByte,
       estimateFeeResponse.feeSat,
@@ -402,6 +413,7 @@ async function openChannelWhenHtlcsSettled(
   const channelId = channelRequest.channelId;
   const start = new Date();
   const maximumPaymentSat = getMaximumPaymentSat();
+
   while (true) {
     const result = await checkAllHtclSettlementsSettled(db, channelId);
     if (!result) {

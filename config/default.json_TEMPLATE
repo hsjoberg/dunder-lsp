@@ -10,6 +10,6 @@
     "lndNode": "127.0.0.1:9735",
     "grpcServer": "127.0.0.1:10009",
     "cert": "~/.lnd/tls.cert",
-    "adminMacaroon": "~/.lnd/data/chain/bitcoin/regtest/admin.macaroon",
+    "adminMacaroon": "~/.lnd/data/chain/bitcoin/regtest/admin.macaroon"
   }
 }

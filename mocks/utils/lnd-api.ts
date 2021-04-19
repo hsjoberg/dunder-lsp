@@ -66,3 +66,7 @@ export function subscribeChannelEvents(lightning: Client) {
 export const checkPeerConnected = jest.fn(() => {
   return true;
 });
+
+export function subscribePeerEvents(lightning: Client) {
+  return new Stream();
+}

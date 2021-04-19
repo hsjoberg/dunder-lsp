@@ -31,6 +31,7 @@ describe("/ondemand-channel/register", () => {
         12345,
         "12345689",
         new Uint8Array([1, 2, 3]),
+        Long.fromValue(123),
         Long.fromValue(9),
       ),
     );

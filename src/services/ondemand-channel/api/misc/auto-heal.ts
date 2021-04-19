@@ -22,7 +22,6 @@ export default function AutoHeal(db: Database, lightning: Client, router: Client
 
   stream.on("data", async (data) => {
     const peerEvent = lnrpc.PeerEvent.decode(data);
-    console.log("New peer", peerEvent);
 
     if (peerEvent.type === lnrpc.PeerEvent.EventType.PEER_OFFLINE) {
       return;
