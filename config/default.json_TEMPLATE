@@ -5,6 +5,10 @@
   "htlcWaitMs": 50,
   "minimumPaymentMultiplier": 5,
   "maximumPaymentSat": 1000000,
+  "fee": {
+    "maxSat": 40000,
+    "maxSatPerVByte": 200,
+  },
   "backend": "lnd",
   "backendConfig": {
     "lndNode": "127.0.0.1:9735",

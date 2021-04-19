@@ -3,7 +3,9 @@ import config from "config";
 import { MIN_CHANNEL_SIZE_SAT } from "../../../utils/constants";
 
 export function checkFeeTooHigh(feerateSatPerByte: Long, feeSat: Long) {
-  return feerateSatPerByte.greaterThan(200) || feeSat.greaterThan(40000);
+  const maxSat = config.get<number>("fee.maxSat");
+  const maxSatPerVByte = config.get<number>("fee.maxSatPerVByte");
+  return feerateSatPerByte.greaterThan(maxSatPerVByte) || feeSat.greaterThan(maxSat);
 }
 
 export function getMinimumPaymentSat(feeEstimateSat: Long) {

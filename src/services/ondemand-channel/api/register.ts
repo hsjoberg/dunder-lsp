@@ -109,6 +109,7 @@ export default function Register(
       estimateFeeResponse = await estimateFee(lightning, Long.fromValue(maximumPaymentSat), 1);
     } catch (e) {
       // If we don't have enough funds we'll get here
+      reply.code(503);
       const error: IErrorResponse = {
         status: "ERROR",
         reason: "Dunder is temporarily offline.",

@@ -81,6 +81,9 @@ export function assertEnvironment() {
   config.get("htlcWaitMs");
   config.get("minimumPaymentMultiplier");
   config.get("maximumPaymentSat");
+  config.get("fee");
+  config.get("fee.maxSat");
+  config.get("fee.maxSatPerVByte");
   config.get("backend");
   config.get("backendConfig.lndNode");
   config.get("backendConfig.grpcServer");
