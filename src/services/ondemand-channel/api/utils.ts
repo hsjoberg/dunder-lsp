@@ -12,7 +12,10 @@ export function getMinimumPaymentSat(feeEstimateSat: Long) {
   const feeSubsidyFactor = config.get<number>("fee.subsidyFactor");
 
   return Math.max(
-    feeEstimateSat.mul(feeSubsidyFactor).mul(5).toNumber(),
+    feeEstimateSat
+      .div(1 / feeSubsidyFactor)
+      .mul(5)
+      .toNumber(),
     MIN_CHANNEL_SIZE_SAT, // lnd minchansize
   );
 }

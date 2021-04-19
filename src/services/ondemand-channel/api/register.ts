@@ -414,7 +414,7 @@ async function openChannelWhenHtlcsSettled(
   const channelId = channelRequest.channelId;
   const start = new Date();
   const maximumPaymentSat = getMaximumPaymentSat();
-  const feeSubsidyFactor = config.get<number>("fee.subsidyFactor");
+  const feeSubsidyFactor = config.get<number>("fee.subsidyFactor") || 1;
 
   while (true) {
     const result = await checkAllHtclSettlementsSettled(db, channelId);
@@ -474,7 +474,7 @@ async function openChannelWhenHtlcsSettled(
           throw e;
         }
         const estimatedFeeMsat = feeResult.feeSat.mul(MSAT);
-        const estimatedFeeMsatSubsidized = estimatedFeeMsat.mul(feeSubsidyFactor);
+        const estimatedFeeMsatSubsidized = estimatedFeeMsat.div(1 / feeSubsidyFactor);
 
         // Attempt to open a channel with the requesting party
         const localFunding = Long.fromValue(maximumPaymentSat);
