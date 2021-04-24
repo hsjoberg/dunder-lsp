@@ -65,7 +65,9 @@ export const AdminCreate: React.FunctionComponent = (props) => {
   useEffect(() => {
     let ws: WebSocket;
     (async () => {
-      ws = new WebSocket("ws://localhost:8080/admin/api/create-admin-lnurl-auth-ws");
+      const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
+      const host = window.location.host;
+      ws = new WebSocket(`${wsProtocol}://${host}/admin/api/create-admin-lnurl-auth-ws`);
       ws.onmessage = (event) => {
         const response = JSON.parse(event.data);
         if (response.lnurlAuth) {
