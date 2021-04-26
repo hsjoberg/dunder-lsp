@@ -18,12 +18,12 @@ The API endpoints supplied by dunder LSP are:
 
 - /estimateFee - returns estimated fee (sats) and fee rate (sats per byte)
 
-- /getInfo - returns info from lnd - for details, see https://github.com/LN-Zap/node-lnd-grpc/blob/master/proto/0.12.0-beta/lnrpc/rpc.proto#L1567
+- /getInfo - returns info from lnd, see https://github.com/hsjoberg/dunder-lsp/blob/master/proto/rpc.proto#L1596 and look for GetInfoReponse to understand the returned data. Exact line numbers may vary.
 
 - /ondemand-channel
     - /check-status - checks validity and sats claimable.
-    - /claim - asks dunder to push the clamiable amount (minus fees) into a new channel.
-    - /register - registers a blixt wallet with dunder. Necessary to use claim below.
+    - /claim - rarely neded. Used to check status of a request in case /register does not succeed to give full feedback.
+    - /register - registers a channel request and takes care of opening the channel to the user. Then dunder will push the amount into a new channel.
     - /service-status - returns status (boolean), minimum and maximum payment accepted, current fee estimate, and peer.
 
 ## Build
