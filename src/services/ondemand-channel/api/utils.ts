@@ -1,6 +1,5 @@
 import Long from "long";
 import config from "config";
-import { MIN_CHANNEL_SIZE_SAT } from "../../../utils/constants";
 
 export function checkFeeTooHigh(feerateSatPerByte: Long, feeSat: Long) {
   const maxSat = config.get<number>("fee.maxSat");
@@ -11,13 +10,10 @@ export function checkFeeTooHigh(feerateSatPerByte: Long, feeSat: Long) {
 export function getMinimumPaymentSat(feeEstimateSat: Long) {
   const feeSubsidyFactor = config.get<number>("fee.subsidyFactor");
 
-  return Math.max(
-    feeEstimateSat
-      .div(1 / feeSubsidyFactor)
-      .mul(5)
-      .toNumber(),
-    MIN_CHANNEL_SIZE_SAT, // lnd minchansize
-  );
+  return feeEstimateSat
+    .div(1 / feeSubsidyFactor)
+    .mul(5)
+    .toNumber();
 }
 
 export function getMaximumPaymentSat() {

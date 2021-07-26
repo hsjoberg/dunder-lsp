@@ -11,7 +11,7 @@ import {
 import { checkPeerConnected, openChannelSync, verifyMessage } from "../../../utils/lnd-api";
 import { IErrorResponse } from "../index";
 import { bytesToHexString } from "../../../utils/common";
-import { MIN_CHANNEL_SIZE_SAT } from "../../../utils/constants";
+import { getMaximumPaymentSat } from "./utils";
 
 export interface IClaimRequest {
   pubkey: string;
@@ -25,6 +25,7 @@ export interface IClaimResponse {
 
 export default function Claim(db: Database, lightning: Client): RouteHandlerMethod {
   return async (request, reply) => {
+    const maximumPaymentSat = getMaximumPaymentSat();
     const claimRequest = JSON.parse(request.body as string) as IClaimRequest;
 
     // Verify that the message is valid
@@ -52,17 +53,6 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
 
     const unclaimed = await getChannelRequestUnclaimedAmount(db, claimRequest.pubkey);
 
-    if (unclaimed <= MIN_CHANNEL_SIZE_SAT) {
-      reply.code(400);
-      const error: IErrorResponse = {
-        status: "ERROR",
-        reason:
-          "The requested amount is below the minimum requirement of 20000 satoshi." +
-          "In order to claim these funds, you need to receive another payment through Dunder.",
-      };
-      return error;
-    }
-
     reply.send({
       status: "OK",
       amountSat: unclaimed,
@@ -73,7 +63,7 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
       const result = await openChannelSync(
         lightning,
         claimRequest.pubkey,
-        Long.fromValue(unclaimed).mul(2),
+        Long.fromValue(maximumPaymentSat),
         Long.fromValue(unclaimed),
         true,
         true,
