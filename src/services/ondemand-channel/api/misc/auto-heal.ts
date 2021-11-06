@@ -44,7 +44,7 @@ export default function AutoHeal(db: Database, lightning: Client, router: Client
     }
 
     try {
-      const localFunding = Long.fromValue(maximumPaymentSat);
+      const localFunding = Long.fromValue(maximumPaymentSat).add(10_000);
       const pushAmount = Long.fromValue(unclaimed);
       const result = await openChannelSync(
         lightning,

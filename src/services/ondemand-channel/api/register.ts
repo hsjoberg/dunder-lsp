@@ -477,7 +477,7 @@ async function openChannelWhenHtlcsSettled(
         const estimatedFeeMsatSubsidized = estimatedFeeMsat.div(1 / feeSubsidyFactor);
 
         // Attempt to open a channel with the requesting party
-        const localFunding = Long.fromValue(maximumPaymentSat);
+        const localFunding = Long.fromValue(maximumPaymentSat).add(10_000);
         const pushAmount = partTotalMsat.subtract(estimatedFeeMsatSubsidized).div(MSAT);
         const result = await (async () => {
           let attempt = 3;

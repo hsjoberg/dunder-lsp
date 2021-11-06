@@ -63,7 +63,7 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
       const result = await openChannelSync(
         lightning,
         claimRequest.pubkey,
-        Long.fromValue(maximumPaymentSat),
+        Long.fromValue(maximumPaymentSat).add(10_000),
         Long.fromValue(unclaimed),
         true,
         true,
