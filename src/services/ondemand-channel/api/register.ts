@@ -227,24 +227,24 @@ const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
   const stream = htlcInterceptor(router);
 
   stream.on("data", async (data) => {
-    console.log("\nINTERCEPTING HTLC\n-----------");
-    console.log(formatISO(new Date()));
     const request = routerrpc.ForwardHtlcInterceptRequest.decode(data);
+
+    // Check if this HTLC outgoing channel Id is related to a channel request
+    // If it's not we'll resume the normal HTLC forwarding
+    const channelRequest = await getChannelRequest(db, request.outgoingRequestedChanId.toString());
+    if (!channelRequest) {
+      doActionHtlc(routerrpc.ResolveHoldForwardAction.RESUME, stream, request.incomingCircuitKey);
+      return;
+    }
+
+    console.log("\n\nINTERCEPTING HTLC\n-----------");
+    console.log(formatISO(new Date()));
     console.log("outgoingAmountMsat", request.outgoingAmountMsat.toString());
     console.log("outgoingRequestedChanId", request.outgoingRequestedChanId.toString());
     console.log("incomingCircuitKey.chanId", request.incomingCircuitKey?.chanId?.toString());
     console.log("incomingCircuitKey.htlcId", request.incomingCircuitKey?.htlcId?.toString());
     console.log("outgoingAmountMsat.request.outgoingExpiry", request.outgoingExpiry.toString());
     console.log("customRecords", JSON.stringify(request.customRecords));
-
-    // Check if this HTLC outgoing channel Id is related to a channel request
-    // If it's not we'll resume the normal HTLC forwarding
-    const channelRequest = await getChannelRequest(db, request.outgoingRequestedChanId.toString());
-    if (!channelRequest) {
-      console.log("SKIPPING INCOMING HTLC");
-      doActionHtlc(routerrpc.ResolveHoldForwardAction.RESUME, stream, request.incomingCircuitKey);
-      return;
-    }
 
     // If we found this HTLC already in the database, we'll fail this HTLC.
     // This is related to a bug in lnd where HTLCs are replayed.
@@ -526,14 +526,15 @@ const subscribeHtlc = (db: Database, router: Client) => {
   const stream = subscribeHtlcEvents(router);
 
   stream.on("data", async (data) => {
-    console.log("\nINCOMING HTLC EVENT\n-----------");
     const htlcEvent = routerrpc.HtlcEvent.decode(data);
-    console.log("event", htlcEvent.event);
-    console.log("incomingHtlcId", htlcEvent.incomingHtlcId.toString());
-
     if (!htlcEvent.settleEvent) {
       return;
     }
+
+    console.log("\nINCOMING HTLC EVENT\n-----------");
+    console.log("event", htlcEvent.event);
+    console.log("incomingHtlcId", htlcEvent.incomingHtlcId.toString());
+
     const hodl = interceptedHtlcHodl[htlcEvent.outgoingChannelId.toString()]?.find(
       ({ incomingChannelId, htlcId }) => {
         return (
