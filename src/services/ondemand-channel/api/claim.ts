@@ -68,7 +68,7 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
         true,
         true,
       );
-      const txId = bytesToHexString(result.fundingTxidBytes.reverse());
+      const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
       await updateChannelRequestSetAllRegisteredAsDone(
         db,
         claimRequest.pubkey,

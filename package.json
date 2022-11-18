@@ -2,9 +2,9 @@
   "name": "dunder-lsp",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "prebuild": "cd src/services/admin/react-admin && npm run build",
+    "prebuild": "cd src/services/admin/react-admin && npm install && npm run build",
     "postbuild": "cp src/proto.js dist && cp -r src/services/admin/react-admin/build dist/services/admin/public",
-    "start": "rm -rf dist && npm run build && node --max-http-header-size=800000 dist/server.js",
+    "start": "node --max-http-header-size=800000 dist/server.js",
     "watch": "concurrently \"tsc -p tsconfig.json -w\" \"nodemon -w dist dist/server.js\"",
     "proto": "pbjs --force-long -t static-module -o src/proto.js proto/rpc.proto proto/router.proto && pbts -o src/proto.d.ts src/proto.js",
     "test": "jest tests",

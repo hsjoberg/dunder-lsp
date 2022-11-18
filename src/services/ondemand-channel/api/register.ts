@@ -498,7 +498,7 @@ async function openChannelWhenHtlcsSettled(
           }
           throw new Error("Could not open channel");
         })();
-        const txId = bytesToHexString(result.fundingTxidBytes.reverse());
+        const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
 
         // Once we've opened a channel, we mark the channel request as completed
         await updateChannelRequest(db, {
