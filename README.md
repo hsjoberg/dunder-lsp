@@ -23,8 +23,8 @@ The `master` branch always expects the latest version of lnd. Lnd compiled with 
 1. Run lnd, wallet must be unlocked for Dunder to operate correctly
 2. `git clone https://github.com/hsjoberg/dunder-lsp && cd dunder-lsp`
 3. Copy `config/default.json_TEMPLATE` to `config/default.json` and set up your configuration
-4. `yarn`
-5. `yarn start`
+4. `npm install`
+5. `npm start`
 
 # Admin interface
 
@@ -43,7 +43,7 @@ This will create a temporary HTTP server serving an LNURL-auth endpoint at /lnur
 
 # Test
 
-To do tests run `yarn test` or `yarn test:coverage`.
+To do tests run `npm run test` or `npm run test:coverage`.
 
 Any new code should not decerease code coverage significantly.
 
