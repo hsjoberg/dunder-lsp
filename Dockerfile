@@ -14,6 +14,7 @@ WORKDIR /app
 COPY package.json /app/
 COPY proto /app/proto
 COPY migrations /app/migrations
+COPY scripts /app/scripts
 RUN npm install
 COPY --from=builder /app/dist /app/dist
 CMD ["npm", "start"] 
