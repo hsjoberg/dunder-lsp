@@ -1,11 +1,11 @@
 FROM node:16 as builder
 WORKDIR /app
-RUN npm install -g protobufjs-cli
 COPY package.json package-lock.json /app/
 COPY proto /app/proto
 COPY src/services/admin/react-admin/package.json src/services/admin/react-admin/package.json
-RUN npm run proto
+RUN export PATH="/app/node_modules/.bin:${PATH}"
 RUN npm install
+RUN npm run proto
 COPY . .
 RUN npm run build
 
