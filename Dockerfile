@@ -7,7 +7,8 @@ RUN export PATH="/app/node_modules/.bin:${PATH}"
 RUN npm install
 RUN npm run proto
 COPY . .
-RUN npm run build
+RUN cd src/services/admin/react-admin && npm install
+RUN cd /app && npm run build
 
 FROM node:16
 WORKDIR /app
