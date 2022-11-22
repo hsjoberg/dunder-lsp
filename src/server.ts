@@ -1,4 +1,10 @@
 import config from "config";
+import cacheGraphOnStartup from "./utils/api/cacheGraphOnStartup";
+import { cache } from "./utils/constants";
+import { getGrpcClients } from "./utils/grpc";
+
+const { lightning } = getGrpcClients();
+
 if (config.util.getConfigSources().length === 0) {
   throw new Error("Could not find any config sources. Did you forget to create the config file?");
 }
@@ -18,3 +24,7 @@ server.listen(port, domain, (err, address) => {
   }
   console.log(`Server listening at ${address}`);
 });
+
+
+// Cache graph on startup
+cacheGraphOnStartup({cache, lightning});

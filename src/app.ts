@@ -2,9 +2,11 @@ import fastify, { FastifyServerOptions } from "fastify";
 import fastifyCors from "fastify-cors";
 import Long from "long";
 
-import { getInfo, estimateFee } from "./utils/lnd-api";
+import { getInfo, estimateFee, queryRoute } from "./utils/lnd-api";
 import { getGrpcClients } from "./utils/grpc";
 import { assertEnvironment } from "./utils/common";
+import describeGraphApi from "./utils/api/describeGraphApi";
+import { cache } from "./utils/constants";
 
 const { lightning, router } = getGrpcClients();
 
@@ -39,5 +41,13 @@ export default function (options?: FastifyServerOptions) {
     return await getInfo(lightning);
   });
 
+  app.get("/queryRoute", async function (request: any) {
+    return await queryRoute(lightning, request.query.pubkey, request.query.amt, request.query.fee)
+  });
+
+  app.get('/describeGraph', async function() {
+    return await describeGraphApi({cache, lightning});
+  });
+  
   return app;
 }

@@ -150,3 +150,32 @@ export function subscribePeerEvents(lightning: Client) {
     undefined,
   );
 }
+
+
+export async function queryRoute(lightning: Client, pubKey: string, amt: Long, fee: any) {
+  const QueryRoutesRequest = lnrpc.QueryRoutesRequest.encode({
+    pubKey,
+    amt,
+    feeLimit: fee,
+  }).finish();
+  const response = await grpcMakeUnaryRequest<lnrpc.QueryRoutesResponse>(
+    lightning,
+    "/lnrpc.Lightning/QueryRoutes",
+    QueryRoutesRequest,
+    lnrpc.QueryRoutesResponse.decode,
+  );
+  return response;
+}
+
+export async function describeGraph(lightning: Client) {
+  const DescribeGraphRequest = lnrpc.ChannelGraphRequest.encode({}).finish();
+
+  const response = await grpcMakeUnaryRequest<lnrpc.ChannelGraph>(
+    lightning,
+    '/lnrpc.Lightning/DescribeGraph',
+    DescribeGraphRequest,
+    lnrpc.ChannelGraph.decode,
+  );
+  
+  return response;
+}
