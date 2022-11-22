@@ -37,10 +37,12 @@ export default async function cacheGraphOnStartup({cache, lightning}: Args) {
             return cachedData;
           }
 
+          console.log('starting graph cache on startup...');
           const result = await describeGraph(lightning);
 
           cache.set(cacheKey, result);
 
+          console.log('startup graph caching complete.');
           return result;
         }
       ],
