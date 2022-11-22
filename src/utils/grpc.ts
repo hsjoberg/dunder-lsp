@@ -33,6 +33,12 @@ export const getGrpcClients = () => {
     ["./proto/rpc.proto", "./proto/router.proto"],
     loaderOptions,
   );
+
+  const params = {
+    'grpc.max_receive_message_length': 1024 * 1024 * 100,
+    'grpc.max_send_message_length': 1024 * 1024 * 100,
+  };
+
   const lnrpcProto = loadPackageDefinition(packageDefinition).lnrpc as GrpcObject;
   const routerProto = loadPackageDefinition(packageDefinition).routerrpc as GrpcObject;
   const macaroon = fs.readFileSync(adminMacaroon).toString("hex");
@@ -47,8 +53,8 @@ export const getGrpcClients = () => {
   let callCreds = credentials.combineCallCredentials(macaroonCreds);
   let creds = credentials.combineChannelCredentials(sslCreds, macaroonCreds);
 
-  let lightning = new (lnrpcProto as any).Lightning(grpcServer, creds) as Client;
-  let router = new (routerProto as any).Router(grpcServer, creds) as Client;
+  let lightning = new (lnrpcProto as any).Lightning(grpcServer, creds, params) as Client;
+  let router = new (routerProto as any).Router(grpcServer, creds, params) as Client;
 
   return { lightning, router };
 };
