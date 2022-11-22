@@ -151,7 +151,6 @@ export function subscribePeerEvents(lightning: Client) {
   );
 }
 
-
 export async function queryRoute(lightning: Client, pubKey: string, amt: Long, fee: any) {
   const QueryRoutesRequest = lnrpc.QueryRoutesRequest.encode({
     pubKey,
@@ -172,10 +171,10 @@ export async function describeGraph(lightning: Client) {
 
   const response = await grpcMakeUnaryRequest<lnrpc.ChannelGraph>(
     lightning,
-    '/lnrpc.Lightning/DescribeGraph',
+    "/lnrpc.Lightning/DescribeGraph",
     DescribeGraphRequest,
     lnrpc.ChannelGraph.decode,
   );
-  
+
   return response;
 }

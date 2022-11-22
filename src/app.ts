@@ -42,12 +42,12 @@ export default function (options?: FastifyServerOptions) {
   });
 
   app.get("/queryRoute", async function (request: any) {
-    return await queryRoute(lightning, request.query.pubkey, request.query.amt, request.query.fee)
+    return await queryRoute(lightning, request.query.pubkey, request.query.amt, request.query.fee);
   });
 
-  app.get('/describeGraph', async function() {
-    return await describeGraphApi({cache, lightning});
+  app.get("/describeGraph", async function () {
+    return await describeGraphApi({ cache, lightning });
   });
-  
+
   return app;
 }

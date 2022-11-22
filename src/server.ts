@@ -25,6 +25,5 @@ server.listen(port, domain, (err, address) => {
   console.log(`Server listening at ${address}`);
 });
 
-
 // Cache graph on startup
-cacheGraphOnStartup({cache, lightning});
+cacheGraphOnStartup({ cache, lightning });

@@ -35,8 +35,8 @@ export const getGrpcClients = () => {
   );
 
   const params = {
-    'grpc.max_receive_message_length': 1024 * 1024 * 100,
-    'grpc.max_send_message_length': 1024 * 1024 * 100,
+    "grpc.max_receive_message_length": 1024 * 1024 * 100,
+    "grpc.max_send_message_length": 1024 * 1024 * 100,
   };
 
   const lnrpcProto = loadPackageDefinition(packageDefinition).lnrpc as GrpcObject;

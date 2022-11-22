@@ -19,4 +19,4 @@ export const cache = new NodeCache({
   useClones: false,
 });
 
-export const cacheKey = 'graphCache';
+export const cacheKey = "graphCache";
