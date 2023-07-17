@@ -1,19 +1,11 @@
-import { RouteHandlerMethod } from "fastify";
 import { Client, ClientDuplexStream } from "@grpc/grpc-js";
-import { differenceInSeconds, getUnixTime, formatISO } from "date-fns";
-import Long from "long";
-import { Database } from "sqlite";
-import config from "config";
-
-import { lnrpc, routerrpc } from "../../../proto";
-import { MSAT } from "../../../utils/constants";
 import {
+  IChannelRequestDB,
   checkAllHtclSettlementsSettled,
   createChannelRequest,
   createHtlcSettlement,
   getChannelRequest,
   getHtlcSettlement,
-  IChannelRequestDB,
   updateChannelRequest,
   updateHtlcSettlement,
   updateHtlcSettlementByChannelIdSetAsClaimed,
@@ -25,17 +17,24 @@ import {
   sha256,
   timeout,
 } from "../../../utils/common";
+import { checkFeeTooHigh, getMaximumPaymentSat, getMinimumPaymentSat } from "./utils";
 import {
+  checkPeerConnected,
+  estimateFee,
   htlcInterceptor,
   openChannelSync,
   subscribeHtlcEvents,
   verifyMessage,
-  checkPeerConnected,
-  estimateFee,
 } from "../../../utils/lnd-api";
-import { IErrorResponse } from "../index";
+import { differenceInSeconds, formatISO, getUnixTime } from "date-fns";
+import { lnrpc, routerrpc } from "../../../proto";
 
-import { checkFeeTooHigh, getMaximumPaymentSat, getMinimumPaymentSat } from "./utils";
+import { Database } from "sqlite";
+import { IErrorResponse } from "../index";
+import Long from "long";
+import { MSAT } from "../../../utils/constants";
+import { RouteHandlerMethod } from "fastify";
+import config from "config";
 
 export interface IRegisterRequest {
   pubkey: string;
@@ -479,25 +478,17 @@ async function openChannelWhenHtlcsSettled(
         // Attempt to open a channel with the requesting party
         const localFunding = Long.fromValue(maximumPaymentSat).add(10_000);
         const pushAmount = partTotalMsat.subtract(estimatedFeeMsatSubsidized).div(MSAT);
-        const result = await (async () => {
-          let attempt = 3;
-          while (attempt--) {
-            try {
-              return await openChannelSync(
-                lightning,
-                channelRequest.pubkey,
-                localFunding,
-                pushAmount,
-                true,
-                true,
-              );
-            } catch (e) {
-              console.error("Failed to openChannel", e.message);
-              await timeout(5000);
-            }
-          }
-          throw new Error("Could not open channel");
-        })();
+
+        const result = await attemptChannelOpen({
+          lightning,
+          pubkey: channelRequest.pubkey,
+          localFunding,
+          pushAmount,
+          privateChannel: true,
+          spendUnconfirmed: true,
+          zeroConf: true,
+        });
+
         const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
 
         // Once we've opened a channel, we mark the channel request as completed
@@ -570,4 +561,64 @@ htlcId=${htlcEvent.incomingHtlcId.toString()}`);
       settled: 1,
     });
   });
+};
+
+type AttemptChannelOpen = {
+  lightning: Client;
+  pubkey: string;
+  localFunding: Long;
+  pushAmount: Long;
+  privateChannel: boolean;
+  spendUnconfirmed: boolean;
+  zeroConf: boolean;
+};
+const attemptChannelOpen = async ({
+  lightning,
+  pubkey,
+  localFunding,
+  pushAmount,
+  privateChannel,
+  spendUnconfirmed,
+  zeroConf,
+}: AttemptChannelOpen) => {
+  let attempt = 2;
+
+  // First attempt a zero conf channel
+  while (attempt--) {
+    try {
+      return await openChannelSync(
+        lightning,
+        pubkey,
+        localFunding,
+        pushAmount,
+        privateChannel,
+        spendUnconfirmed,
+        zeroConf,
+      );
+    } catch (e: any) {
+      console.error("Failed to Open Zero-Conf Channel", e.message);
+      await timeout(4000);
+    }
+  }
+
+  attempt = 2;
+
+  // If zero conf fails, attempt a regular channel
+  while (attempt--) {
+    try {
+      return await openChannelSync(
+        lightning,
+        pubkey,
+        localFunding,
+        pushAmount,
+        privateChannel,
+        spendUnconfirmed,
+        false,
+      );
+    } catch (e: any) {
+      console.error("Failed to Open Regular Channel", e.message);
+      await timeout(4000);
+    }
+  }
+  throw new Error("Could not open channel");
 };

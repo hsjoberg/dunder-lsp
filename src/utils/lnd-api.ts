@@ -1,8 +1,8 @@
 import { Client, Metadata } from "@grpc/grpc-js";
-import Long from "long";
-
 import { hexToUint8Array, stringToUint8Array } from "./common";
 import { lnrpc, routerrpc } from "../proto";
+
+import Long from "long";
 import { grpcMakeUnaryRequest } from "./grpc";
 
 export async function getInfo(lightning: Client) {
@@ -66,6 +66,7 @@ export async function openChannelSync(
   pushSat: Long,
   privateChannel: boolean,
   spendUnconfirmed: boolean,
+  zeroConf: boolean,
 ) {
   const openChannelSyncRequest = lnrpc.OpenChannelRequest.encode({
     nodePubkey: hexToUint8Array(pubkey),
@@ -75,6 +76,8 @@ export async function openChannelSync(
     minConfs: 0,
     private: privateChannel,
     spendUnconfirmed,
+    zeroConf,
+    commitmentType: 3,
   }).finish();
 
   return await grpcMakeUnaryRequest<lnrpc.ChannelPoint>(

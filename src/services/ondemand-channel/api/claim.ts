@@ -1,15 +1,15 @@
-import { RouteHandlerMethod } from "fastify";
-import { Client } from "@grpc/grpc-js";
-import { Database } from "sqlite";
-import Long from "long";
-
+import { checkPeerConnected, openChannelSync, verifyMessage } from "../../../utils/lnd-api";
 import {
   getChannelRequestUnclaimedAmount,
   updateChannelRequestSetAllRegisteredAsDone,
   updateHtlcSettlementSetAllAsClaimed,
 } from "../../../db/ondemand-channel";
-import { checkPeerConnected, openChannelSync, verifyMessage } from "../../../utils/lnd-api";
+
+import { Client } from "@grpc/grpc-js";
+import { Database } from "sqlite";
 import { IErrorResponse } from "../index";
+import Long from "long";
+import { RouteHandlerMethod } from "fastify";
 import { bytesToHexString } from "../../../utils/common";
 import { getMaximumPaymentSat } from "./utils";
 
@@ -58,13 +58,15 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
       amountSat: unclaimed,
     } as IClaimResponse);
 
-    console.log("Opening channel");
+    // First attempt a zero conf channnel
+    console.log("Opening zero-conf channel");
     try {
       const result = await openChannelSync(
         lightning,
         claimRequest.pubkey,
         Long.fromValue(maximumPaymentSat).add(10_000),
         Long.fromValue(unclaimed),
+        true,
         true,
         true,
       );
@@ -75,8 +77,35 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
         `${txId}:${result.outputIndex}`,
       );
       await updateHtlcSettlementSetAllAsClaimed(db, claimRequest.pubkey);
+
+      return;
     } catch (error) {
-      console.error("Could not open channel", error);
+      console.error("Could not open zero-conf channel", error);
+    }
+
+    // If the zero conf attempt fails, attempt a regular channel
+    console.log("Opening regular channel");
+    try {
+      const result = await openChannelSync(
+        lightning,
+        claimRequest.pubkey,
+        Long.fromValue(maximumPaymentSat).add(10_000),
+        Long.fromValue(unclaimed),
+        true,
+        true,
+        false,
+      );
+      const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
+      await updateChannelRequestSetAllRegisteredAsDone(
+        db,
+        claimRequest.pubkey,
+        `${txId}:${result.outputIndex}`,
+      );
+      await updateHtlcSettlementSetAllAsClaimed(db, claimRequest.pubkey);
+
+      return;
+    } catch (error) {
+      console.error("Could not open regular channel", error);
     }
   };
 }
