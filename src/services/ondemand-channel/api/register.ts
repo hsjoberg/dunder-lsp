@@ -265,11 +265,21 @@ const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
 
     // Check if the payment hash for the HTLC matches with the preimage that we got.
     // Fail if it does not.
+    //
+    // We send INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS as the failure code so that probers can analyze
+    // the situation correctly.
+    // This is a violation of BOLT4, but it's not being used malicously.
     const paymentHash = sha256(hexToUint8Array(channelRequest.preimage ?? ""));
     if (bytesToHexString(request.paymentHash) !== paymentHash) {
       // TODO error handling
       console.error("Payment hash does not match");
-      doActionHtlc(routerrpc.ResolveHoldForwardAction.FAIL, stream, request.incomingCircuitKey);
+      doActionHtlc(
+        routerrpc.ResolveHoldForwardAction.FAIL,
+        stream,
+        request.incomingCircuitKey,
+        undefined,
+        lnrpc.Failure.FailureCode["INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS"],
+      );
       return;
     }
 
@@ -387,12 +397,14 @@ const doActionHtlc = (
   stream: ClientDuplexStream<any, any>,
   incomingCircuitKey: routerrpc.ForwardHtlcInterceptRequest["incomingCircuitKey"],
   preimage?: string,
+  failureCode?: lnrpc.Failure.FailureCode,
 ) => {
   const settleResponse = routerrpc.ForwardHtlcInterceptResponse.encode({
     action,
     incomingCircuitKey,
     preimage:
       action === routerrpc.ResolveHoldForwardAction.SETTLE ? hexToUint8Array(preimage!) : undefined,
+    failureCode,
   }).finish();
   stream.write(settleResponse);
 };
