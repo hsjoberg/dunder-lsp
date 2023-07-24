@@ -52,7 +52,7 @@ export default function AutoHeal(db: Database, lightning: Client, router: Client
         localFunding,
         pushAmount,
         true,
-        true,
+        false,
       );
       const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
       await updateChannelRequestSetAllRegisteredAsDone(
