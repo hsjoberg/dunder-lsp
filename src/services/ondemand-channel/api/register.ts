@@ -501,7 +501,7 @@ async function openChannelWhenHtlcsSettled(
                 localFunding,
                 pushAmount,
                 true,
-                true,
+                false,
               );
             } catch (e) {
               console.error("Failed to openChannel", e.message);
