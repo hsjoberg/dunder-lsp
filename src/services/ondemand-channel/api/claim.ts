@@ -11,6 +11,7 @@ import { IErrorResponse } from "../index";
 import Long from "long";
 import { RouteHandlerMethod } from "fastify";
 import { bytesToHexString } from "../../../utils/common";
+import config from "config";
 import { getMaximumPaymentSat } from "./utils";
 
 export interface IClaimRequest {
@@ -27,6 +28,7 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
   return async (request, reply) => {
     const maximumPaymentSat = getMaximumPaymentSat();
     const claimRequest = JSON.parse(request.body as string) as IClaimRequest;
+    const allowZeroConfChannels = config.get<boolean>("allowZeroConfChannels") || false;
 
     // Verify that the message is valid
     const verifyMessageResponse = await verifyMessage(lightning, "CLAIM", claimRequest.signature);
@@ -58,29 +60,32 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
       amountSat: unclaimed,
     } as IClaimResponse);
 
-    // First attempt a zero conf channnel
-    console.log("Opening zero-conf channel");
-    try {
-      const result = await openChannelSync(
-        lightning,
-        claimRequest.pubkey,
-        Long.fromValue(maximumPaymentSat).add(10_000),
-        Long.fromValue(unclaimed),
-        true,
-        true,
-        true,
-      );
-      const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
-      await updateChannelRequestSetAllRegisteredAsDone(
-        db,
-        claimRequest.pubkey,
-        `${txId}:${result.outputIndex}`,
-      );
-      await updateHtlcSettlementSetAllAsClaimed(db, claimRequest.pubkey);
+    // Only attempt a zero conf channel if the config allows it
+    if (!!allowZeroConfChannels) {
+      console.log("Opening zero-conf channel");
+      try {
+        const result = await openChannelSync(
+          lightning,
+          claimRequest.pubkey,
+          Long.fromValue(maximumPaymentSat).add(10_000),
+          Long.fromValue(unclaimed),
+          true,
+          true,
+          true,
+        );
+        const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
+        await updateChannelRequestSetAllRegisteredAsDone(
+          db,
+          claimRequest.pubkey,
+          `${txId}:${result.outputIndex}`,
+        );
+        await updateHtlcSettlementSetAllAsClaimed(db, claimRequest.pubkey);
 
-      return;
-    } catch (error) {
-      console.error("Could not open zero-conf channel", error);
+        // Return early if the channel open succeeds.
+        return;
+      } catch (error) {
+        console.error("Could not open zero-conf channel", error);
+      }
     }
 
     // If the zero conf attempt fails, attempt a regular channel

@@ -1,5 +1,6 @@
-import { bech32 } from "bech32";
 import { createHash, randomBytes } from "crypto";
+
+import { bech32 } from "bech32";
 import config from "config";
 import querystring from "querystring";
 
@@ -90,4 +91,5 @@ export function assertEnvironment() {
   config.get("backendConfig.grpcServer");
   config.get("backendConfig.cert");
   config.get("backendConfig.adminMacaroon");
+  config.get("allowZeroConfChannels");
 }

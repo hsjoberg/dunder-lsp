@@ -77,7 +77,7 @@ export async function openChannelSync(
     private: privateChannel,
     spendUnconfirmed,
     zeroConf,
-    commitmentType: 3,
+    commitmentType: lnrpc.CommitmentType.ANCHORS,
   }).finish();
 
   return await grpcMakeUnaryRequest<lnrpc.ChannelPoint>(

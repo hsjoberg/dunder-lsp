@@ -414,6 +414,7 @@ async function openChannelWhenHtlcsSettled(
   const start = new Date();
   const maximumPaymentSat = getMaximumPaymentSat();
   const feeSubsidyFactor = config.get<number>("fee.subsidyFactor") || 1;
+  const allowZeroConfChannels = config.get<boolean>("allowZeroConfChannels") || false;
 
   while (true) {
     const result = await checkAllHtclSettlementsSettled(db, channelId);
@@ -486,7 +487,7 @@ async function openChannelWhenHtlcsSettled(
           pushAmount,
           privateChannel: true,
           spendUnconfirmed: true,
-          zeroConf: true,
+          zeroConf: allowZeroConfChannels,
         });
 
         const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
@@ -581,30 +582,31 @@ const attemptChannelOpen = async ({
   spendUnconfirmed,
   zeroConf,
 }: AttemptChannelOpen) => {
-  let attempt = 2;
+  let zeroConfChannelAttempt = 2;
+  let regularChannelAttempt = 2;
 
-  // First attempt a zero conf channel
-  while (attempt--) {
-    try {
-      return await openChannelSync(
-        lightning,
-        pubkey,
-        localFunding,
-        pushAmount,
-        privateChannel,
-        spendUnconfirmed,
-        zeroConf,
-      );
-    } catch (e: any) {
-      console.error("Failed to Open Zero-Conf Channel", e.message);
-      await timeout(4000);
+  // Only attempt zero conf if the config allows for it.
+  if (!!zeroConf) {
+    while (zeroConfChannelAttempt--) {
+      try {
+        return await openChannelSync(
+          lightning,
+          pubkey,
+          localFunding,
+          pushAmount,
+          privateChannel,
+          spendUnconfirmed,
+          zeroConf,
+        );
+      } catch (e: any) {
+        console.error("Failed to Open Zero-Conf Channel", e.message);
+        await timeout(4000);
+      }
     }
   }
 
-  attempt = 2;
-
   // If zero conf fails, attempt a regular channel
-  while (attempt--) {
+  while (regularChannelAttempt--) {
     try {
       return await openChannelSync(
         lightning,
