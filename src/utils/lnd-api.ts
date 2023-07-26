@@ -73,7 +73,7 @@ export async function openChannelSync(
     localFundingAmount,
     pushSat,
     targetConf: 1,
-    minConfs: 0,
+    minConfs: spendUnconfirmed ? 0 : 1,
     private: privateChannel,
     spendUnconfirmed,
     zeroConf,
