@@ -1,15 +1,15 @@
-import { Client } from "@grpc/grpc-js";
-import Long from "long";
-import { Database } from "sqlite";
-
 import {
   getChannelRequestUnclaimedAmount,
   updateChannelRequestSetAllRegisteredAsDone,
   updateHtlcSettlementSetAllAsClaimed,
 } from "../../../../db/ondemand-channel";
-import { pendingChannels, subscribePeerEvents, openChannelSync } from "../../../../utils/lnd-api";
-import { getMaximumPaymentSat } from "../utils";
+import { openChannelSync, pendingChannels, subscribePeerEvents } from "../../../../utils/lnd-api";
+
+import { Client } from "@grpc/grpc-js";
+import { Database } from "sqlite";
+import Long from "long";
 import { bytesToHexString } from "../../../../utils/common";
+import { getMaximumPaymentSat } from "../utils";
 import { lnrpc } from "../../../../proto";
 
 /**
@@ -52,6 +52,7 @@ export default function AutoHeal(db: Database, lightning: Client, router: Client
         localFunding,
         pushAmount,
         true,
+        false,
         false,
       );
       const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
