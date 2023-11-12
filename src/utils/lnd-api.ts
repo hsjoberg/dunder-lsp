@@ -19,8 +19,8 @@ export async function getInfo(lightning: Client) {
 export async function estimateFee(lightning: Client, amount: Long, targetConf: number) {
   const estimateFeeRequest = lnrpc.EstimateFeeRequest.encode({
     AddrToAmount: {
-      tb1qsl4hhqs8skzwknqhwjcyyyjepnwmq8tlcd32m3: amount,
-      tb1qud0w7nh5qh7azyjj0phssxzxp9zqdk8g0czwv6: Long.fromValue(10000),
+      bc1qwljx57mxh2pmh2hgwkhp6z4077s0g8q2s0hh8p: amount,
+      bc1q0aptdcqgpwm63y3p0sl6g2qjdjc2keymdkxzum: Long.fromValue(10000),
     },
     targetConf,
   }).finish();
