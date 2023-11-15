@@ -427,6 +427,7 @@ async function openChannelWhenHtlcsSettled(
   const maximumPaymentSat = getMaximumPaymentSat();
   const feeSubsidyFactor = config.get<number>("fee.subsidyFactor") || 1;
   const allowZeroConfChannels = config.get<boolean>("allowZeroConfChannels") || false;
+  const allowTaprootChannels = config.get<boolean>("allowTaprootChannels") || false;
 
   while (true) {
     const result = await checkAllHtclSettlementsSettled(db, channelId);
@@ -500,6 +501,7 @@ async function openChannelWhenHtlcsSettled(
           privateChannel: true,
           spendUnconfirmed: false,
           zeroConf: allowZeroConfChannels,
+          taprootChannel: allowTaprootChannels,
         });
 
         const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
@@ -584,6 +586,7 @@ type AttemptChannelOpen = {
   privateChannel: boolean;
   spendUnconfirmed: boolean;
   zeroConf: boolean;
+  taprootChannel: boolean;
 };
 const attemptChannelOpen = async ({
   lightning,
@@ -593,6 +596,7 @@ const attemptChannelOpen = async ({
   privateChannel,
   spendUnconfirmed,
   zeroConf,
+  taprootChannel,
 }: AttemptChannelOpen) => {
   let zeroConfChannelAttempt = 2;
   let regularChannelAttempt = 2;
@@ -609,6 +613,7 @@ const attemptChannelOpen = async ({
           privateChannel,
           spendUnconfirmed,
           zeroConf,
+          taprootChannel,
         );
       } catch (e: any) {
         console.error("Failed to Open Zero-Conf Channel", e.message);
@@ -628,6 +633,7 @@ const attemptChannelOpen = async ({
         privateChannel,
         spendUnconfirmed,
         false,
+        taprootChannel,
       );
     } catch (e: any) {
       console.error("Failed to Open Regular Channel", e.message);

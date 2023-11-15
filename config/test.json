@@ -17,5 +17,6 @@
     "cert": "~/.lnd/tls.cert",
     "adminMacaroon": "~/.lnd/data/chain/bitcoin/regtest/admin.macaroon"
   },
-  "allowZeroConfChannels": true
+  "allowZeroConfChannels": true,
+  "allowTaprootChannels": true
 }

@@ -29,6 +29,7 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
     const maximumPaymentSat = getMaximumPaymentSat();
     const claimRequest = JSON.parse(request.body as string) as IClaimRequest;
     const allowZeroConfChannels = config.get<boolean>("allowZeroConfChannels") || false;
+    const allowTaprootChannels = config.get<boolean>("allowTaprootChannels") || false;
 
     // Verify that the message is valid
     const verifyMessageResponse = await verifyMessage(lightning, "CLAIM", claimRequest.signature);
@@ -72,6 +73,7 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
           true,
           true,
           true,
+          allowTaprootChannels,
         );
         const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
         await updateChannelRequestSetAllRegisteredAsDone(
@@ -99,6 +101,7 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
         true,
         true,
         false,
+        allowTaprootChannels,
       );
       const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
       await updateChannelRequestSetAllRegisteredAsDone(
