@@ -633,7 +633,7 @@ const attemptChannelOpen = async ({
         privateChannel,
         spendUnconfirmed,
         false,
-        taprootChannel,
+        false,
       );
     } catch (e: any) {
       console.error("Failed to Open Regular Channel", e.message);
