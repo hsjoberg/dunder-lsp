@@ -67,7 +67,10 @@ export async function openChannelSync(
   privateChannel: boolean,
   spendUnconfirmed: boolean,
   zeroConf: boolean,
+  taprootChannel: boolean,
 ) {
+  const commitmentType = taprootChannel ? lnrpc.CommitmentType.SIMPLE_TAPROOT : lnrpc.CommitmentType.ANCHORS;
+
   const openChannelSyncRequest = lnrpc.OpenChannelRequest.encode({
     nodePubkey: hexToUint8Array(pubkey),
     localFundingAmount,
@@ -77,7 +80,7 @@ export async function openChannelSync(
     private: privateChannel,
     spendUnconfirmed,
     zeroConf,
-    commitmentType: lnrpc.CommitmentType.ANCHORS,
+    commitmentType,
   }).finish();
 
   return await grpcMakeUnaryRequest<lnrpc.ChannelPoint>(
