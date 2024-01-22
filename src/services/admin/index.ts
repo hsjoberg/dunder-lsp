@@ -2,7 +2,7 @@ import { FastifyPluginAsync, RouteHandlerMethod } from "fastify";
 import { Client } from "@grpc/grpc-js";
 import fastifyStatic from "fastify-static";
 import fastifySession from "fastify-session";
-import fastifyCookie from "fastify-cookie";
+import fastifyCookie from "@fastify/cookie";
 import path from "path";
 
 import getDb from "../../db/db";

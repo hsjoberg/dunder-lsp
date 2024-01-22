@@ -2,7 +2,7 @@
   "name": "dunder-lsp",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "prebuild": "cd src/services/admin/react-admin && npm run build",
+    "prebuild": "cd src/services/admin/react-admin && NODE_OPTIONS=--openssl-legacy-provider npm run build",
     "postbuild": "cp src/proto.js dist && cp -r src/services/admin/react-admin/build dist/services/admin/public",
     "start": "node --max-http-header-size=800000 dist/server.js",
     "watch": "concurrently \"tsc -p tsconfig.json -w\" \"nodemon -w dist dist/server.js\"",
@@ -15,6 +15,7 @@
   "author": "Hampus Sjöberg",
   "license": "MIT",
   "dependencies": {
+    "@fastify/cookie": "^9.3.1",
     "@grpc/grpc-js": "^1.9.14",
     "@grpc/proto-loader": "^0.7.10",
     "bech32": "2.0.0",
