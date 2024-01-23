@@ -27,8 +27,9 @@ The `master` branch always expects the latest version of lnd. Lnd compiled with 
 5. `npm install --legacy-peer-deps`
 6. `cd ../../../../`
 7. `npm install`
-8. `npm run build`
-9. `npm start`
+8. `npm run proto`
+9. `npm run build`
+10. `npm start`
 
 # Admin interface
 
