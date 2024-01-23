@@ -23,8 +23,12 @@ The `master` branch always expects the latest version of lnd. Lnd compiled with 
 1. Run lnd, wallet must be unlocked for Dunder to operate correctly
 2. `git clone https://github.com/hsjoberg/dunder-lsp && cd dunder-lsp`
 3. Copy `config/default.json_TEMPLATE` to `config/default.json` and set up your configuration
-4. `npm install`
-5. `npm start`
+4. `cd src/services/admin/react-admin`
+5. `npm install --legacy-peer-deps`
+6. `cd ../../../../`
+7. `npm install`
+8. `npm run build`
+9. `npm start`
 
 # Admin interface
 
