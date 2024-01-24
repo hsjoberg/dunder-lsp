@@ -156,3 +156,16 @@ export function subscribePeerEvents(lightning: Client) {
     undefined,
   );
 }
+
+export async function listChannels(lightning: Client, publicOnly: boolean = true) {
+  const listChannelsRequest = lnrpc.ListChannelsRequest.encode({
+    publicOnly: true,
+  }).finish();
+  const response = await grpcMakeUnaryRequest<lnrpc.ListChannelsResponse>(
+    lightning,
+    "/lnrpc.Lightning/ListChannels",
+    listChannelsRequest,
+    lnrpc.ListChannelsResponse.decode,
+  );
+  return response;
+}

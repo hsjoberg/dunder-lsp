@@ -1,6 +1,7 @@
 import fastify, { FastifyServerOptions } from "fastify";
 import fastifyCors from "fastify-cors";
 import Long from "long";
+import config from "config";
 
 import { getInfo, estimateFee } from "./utils/lnd-api";
 import { getGrpcClients } from "./utils/grpc";
@@ -21,6 +22,15 @@ export default function (options?: FastifyServerOptions) {
     lightning,
     router,
   });
+
+  const channelLiquidity = config.get<boolean>("channelLiquidityQueryEnabled") || false;
+  if (channelLiquidity) {
+    app.register(require("./services/channel-liquidity/index"), {
+      prefix: "/channel-liquidity",
+      lightning,
+      router,
+    });
+  }
 
   app.register(require("./services/admin/index"), {
     prefix: "/admin",
