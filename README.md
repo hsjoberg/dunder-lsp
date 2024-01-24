@@ -13,14 +13,28 @@ on-chain fee.
 
 More on how this works [here](https://github.com/hsjoberg/blixt-wallet/issues/242).
 
+## Dunder's API
+
+The API endpoints supplied by dunder LSP are:
+
+- /estimateFee - returns estimated fee (sats) and fee rate (sats per byte)
+
+- /getInfo - returns info from lnd, see https://github.com/hsjoberg/dunder-lsp/blob/master/proto/rpc.proto#L1596 and look for GetInfoReponse to understand the returned data. Exact line numbers may vary.
+
+- /ondemand-channel
+    - /check-status - checks validity and sats claimable.
+    - /claim - rarely neded. Used to check status of a request in case /register does not succeed to give full feedback.
+    - /register - registers a channel request and takes care of opening the channel to the user. Then dunder will push the amount into a new channel.
+    - /service-status - returns status (boolean), minimum and maximum payment accepted, current fee estimate, and peer.
+
 ## Build
 
-Dunder require lnd as the Lightning backend right now, though the plan is to
+Dunder requires lnd as the Lightning backend right now, though the plan is to
 make the service implementation independent.
 
-The `master` branch always expects the latest version of lnd. Lnd compiled with routerrpc is required.
+The `master` branch always expects the latest version of lnd, which must be compiled with routerrpc enabled.
 
-1. Run lnd, wallet must be unlocked for Dunder to operate correctly
+1. Run lnd. The wallet must be unlocked for Dunder to operate correctly.
 2. `git clone https://github.com/hsjoberg/dunder-lsp && cd dunder-lsp`
 3. Copy `config/default.json_TEMPLATE` to `config/default.json` and set up your configuration
 4. `cd src/services/admin/react-admin`
