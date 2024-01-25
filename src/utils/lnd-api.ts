@@ -17,11 +17,23 @@ export async function getInfo(lightning: Client) {
 }
 
 export async function estimateFee(lightning: Client, amount: Long, targetConf: number) {
-  const estimateFeeRequest = lnrpc.EstimateFeeRequest.encode({
-    AddrToAmount: {
+  let AddrToAmount: { [key: string]: Long } = {};
+  const { network } = (await getInfo(lightning)).chains[0];
+
+  if (network === "regtest") {
+    AddrToAmount = {
+      bcrt1p5u7y9s9hf0xd2hmaqvdntvzgewcwpnu4c050ucjvg7z7kxdv2xgqurylz5: amount,
+      bcrt1p732hwvhc4scanstktkrnxmku8m8f40svw3u9qp2krqh0f7vjfhuskk25fd: Long.fromValue(10000),
+    };
+  } else {
+    AddrToAmount = {
       bc1qwljx57mxh2pmh2hgwkhp6z4077s0g8q2s0hh8p: amount,
       bc1q0aptdcqgpwm63y3p0sl6g2qjdjc2keymdkxzum: Long.fromValue(10000),
-    },
+    };
+  }
+
+  const estimateFeeRequest = lnrpc.EstimateFeeRequest.encode({
+    AddrToAmount,
     targetConf,
   }).finish();
 
@@ -69,7 +81,10 @@ export async function openChannelSync(
   zeroConf: boolean,
   taprootChannel: boolean,
 ) {
-  const commitmentType = taprootChannel ? lnrpc.CommitmentType.SIMPLE_TAPROOT : lnrpc.CommitmentType.ANCHORS;
+  const commitmentType = taprootChannel
+    ? lnrpc.CommitmentType.SIMPLE_TAPROOT
+    : lnrpc.CommitmentType.ANCHORS;
+  const remoteChanReserveSat = Long.fromValue(360);
 
   const openChannelSyncRequest = lnrpc.OpenChannelRequest.encode({
     nodePubkey: hexToUint8Array(pubkey),
@@ -81,6 +96,7 @@ export async function openChannelSync(
     spendUnconfirmed,
     zeroConf,
     commitmentType,
+    remoteChanReserveSat,
   }).finish();
 
   return await grpcMakeUnaryRequest<lnrpc.ChannelPoint>(
