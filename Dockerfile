@@ -1,4 +1,4 @@
-FROM node:18 as builder
+FROM node:20 as builder
 WORKDIR /app
 COPY package.json package-lock.json /app/
 COPY proto /app/proto
@@ -10,7 +10,7 @@ COPY . .
 RUN cd src/services/admin/react-admin && npm install --legacy-peer-deps
 RUN cd /app && npm run build
 
-FROM node:18
+FROM node:20
 WORKDIR /app
 COPY package.json /app/
 COPY proto /app/proto

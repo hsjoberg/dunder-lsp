@@ -14,7 +14,7 @@ jest.setTimeout(20 * 1000);
 import { openChannelSync } from "../../../../mocks/utils/lnd-api";
 
 describe("/ondemand-channel/register", () => {
-  it("should fail HTLC that has a part that never arrived", async (done) => {
+  it("should fail HTLC that has a part that never arrived", async () => {
     const app = build();
 
     const amountSat = 20000;
@@ -69,6 +69,5 @@ describe("/ondemand-channel/register", () => {
     await timeout(500);
 
     app.close();
-    done();
   });
 });

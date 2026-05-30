@@ -4,7 +4,7 @@ import { Client } from "@grpc/grpc-js";
 import getDb from "../../../db/db";
 import { getHtlcSettlements, getHtlcSettlementsTotal } from "../../../db/ondemand-channel-admin";
 import { pendingChannels } from "../../../utils/lnd-api";
-import { lnrpc } from "proto";
+import { lnrpc } from "../../../proto";
 
 interface PendingChannel extends lnrpc.PendingChannelsResponse.IPendingChannel {
   id: string;
@@ -20,7 +20,7 @@ const AdminPendingChannels = async function (app, { lightning, router }) {
       sort: string;
     };
   }>("/pendingChannels", async (request, reply) => {
-    if (request.session.authenticated !== true) {
+    if ((request.session as any).get("authenticated") !== true) {
       reply.code(403);
       reply.send("Not authenticated");
       return;
@@ -77,7 +77,7 @@ const AdminPendingChannels = async function (app, { lightning, router }) {
       channelPoint: string;
     };
   }>("/pendingChannels/:channelPoint", async (request, reply) => {
-    if (request.session.authenticated !== true) {
+    if ((request.session as any).get("authenticated") !== true) {
       reply.code(403);
       reply.send("Not authenticated");
       return;

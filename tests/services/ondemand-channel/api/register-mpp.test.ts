@@ -14,7 +14,7 @@ import { openChannelSync } from "../../../../mocks/utils/lnd-api";
 jest.setTimeout(20000);
 
 describe("/ondemand-channel/register", () => {
-  test("registers and opens a channel when the HTLCs are settled (MPP)", async (done) => {
+  test("registers and opens a channel when the HTLCs are settled (MPP)", async () => {
     const app = build();
 
     const amountSat = 20000;
@@ -108,6 +108,5 @@ describe("/ondemand-channel/register", () => {
     await timeout(500);
 
     app.close();
-    done();
   });
 });

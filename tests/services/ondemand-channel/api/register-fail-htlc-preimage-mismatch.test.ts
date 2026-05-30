@@ -12,7 +12,7 @@ import { openChannelSync } from "../../../../mocks/utils/lnd-api";
 import { createForwardHtlcInterceptRequest, sendRegisterRequest } from "./register-helpers";
 
 describe("/ondemand-channel/register", () => {
-  it("should fail HTLC that has a paymentHash that doesn't match with the registered preimage", async (done) => {
+  it("should fail HTLC that has a paymentHash that doesn't match with the registered preimage", async () => {
     openChannelSync.mockClear();
     const app = build();
 
@@ -78,6 +78,5 @@ describe("/ondemand-channel/register", () => {
 
     await timeout(500);
     app.close();
-    done();
   });
 });

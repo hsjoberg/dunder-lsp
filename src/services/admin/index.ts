@@ -1,7 +1,7 @@
 import { FastifyPluginAsync, RouteHandlerMethod } from "fastify";
 import { Client } from "@grpc/grpc-js";
-import fastifyStatic from "fastify-static";
-import fastifySession from "fastify-session";
+import fastifyStatic from "@fastify/static";
+import fastifySession from "@fastify/session";
 import fastifyCookie from "@fastify/cookie";
 import path from "path";
 
@@ -20,7 +20,7 @@ const Admin = async function (app, { lightning, router }) {
     cookie: { secure: false },
     secret: bytesToHexString(await generateBytes(32)),
   });
-  app.register(require("fastify-websocket"));
+  app.register(require("@fastify/websocket"));
 
   app.register(require("./api/index"), {
     prefix: "/api",

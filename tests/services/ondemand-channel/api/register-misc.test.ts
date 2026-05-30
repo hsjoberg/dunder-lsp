@@ -6,7 +6,7 @@ import { checkPeerConnected } from "../../../../mocks/utils/lnd-api";
 import { sendRegisterRequest } from "./register-helpers";
 
 describe("/ondemand-channel/register", () => {
-  it("should fail on erroneous signature", async (done) => {
+  it("should fail on erroneous signature", async () => {
     const app = build();
     require("../../../../src/utils/lnd-api").__verifyMessageSetValidSig(false);
     const amountSat = 10000;
@@ -23,10 +23,9 @@ describe("/ondemand-channel/register", () => {
     expect(response.statusCode).toBe(400);
     require("../../../../src/utils/lnd-api").__verifyMessageSetValidSig(true);
     app.close();
-    done();
   });
 
-  test("fails if wallet node in not connected to the service", async (done) => {
+  test("fails if wallet node in not connected to the service", async () => {
     const app = build();
     const amountSat = 10000;
     const preimage = new Uint8Array([3]);
@@ -45,6 +44,5 @@ describe("/ondemand-channel/register", () => {
     });
     expect(response.statusCode).toBe(400);
     app.close();
-    done();
   });
 });

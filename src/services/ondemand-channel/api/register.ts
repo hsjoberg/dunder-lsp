@@ -487,7 +487,7 @@ async function openChannelWhenHtlcsSettled(
           throw e;
         }
         const estimatedFeeMsat = feeResult.feeSat.mul(MSAT);
-        const estimatedFeeMsatSubsidized = estimatedFeeMsat.div(1 / feeSubsidyFactor);
+        const estimatedFeeMsatSubsidized = estimatedFeeMsat.div(1 / feeSubsidyFactor); // FIXME bug if subsidy is 0
 
         // Attempt to open a channel with the requesting party
         const localFunding = Long.fromValue(maximumPaymentSat).add(10_000);

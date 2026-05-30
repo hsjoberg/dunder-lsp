@@ -8,7 +8,7 @@ import { timeout } from "../../../../src/utils/common";
 import { createForwardHtlcInterceptRequest } from "./register-helpers";
 
 describe("/ondemand-channel/register", () => {
-  it("should skip settling HTLCs that are not registered for service", async (done) => {
+  it("should skip settling HTLCs that are not registered for service", async () => {
     const app = build();
     await app.inject({
       url: "/",
@@ -43,6 +43,5 @@ describe("/ondemand-channel/register", () => {
     });
 
     app.close();
-    done();
   });
 });

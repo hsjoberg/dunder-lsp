@@ -1,8 +1,8 @@
 import { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { Client } from "@grpc/grpc-js";
-import fastifySession from "fastify-session";
+import { SessionStore } from "@fastify/session";
 import secp256k1 from "secp256k1";
-import { SocketStream } from "fastify-websocket";
+import { SocketStream } from "@fastify/websocket";
 import config from "config";
 
 import {
@@ -23,7 +23,7 @@ export interface IErrorResponse {
 interface IUser {
   sessionId: string;
   connection: SocketStream;
-  sessionStore: fastifySession.SessionStore;
+  sessionStore: SessionStore;
   session: FastifyRequest["session"];
   k1: string;
 }
@@ -32,7 +32,8 @@ const users: Map<SocketStream, IUser> = new Map();
 const AdminLogin = async function (app, { lightning, router }) {
   const db = await getDb();
 
-  app.get("/test", async () => {
+  app.get("/test", async (request) => {
+    request.session.set<any>("lnurlAuthSession", true);
     return "1";
   });
 
@@ -40,6 +41,10 @@ const AdminLogin = async function (app, { lightning, router }) {
     "/login-ws",
     { websocket: true },
     async (connection: SocketStream, request: FastifyRequest) => {
+      // request.session.set("cookie", {
+      //   authenticated: true,
+      // });
+
       const serverDomain = config.get<string>("serverDomain");
 
       const sessionId = request.session.sessionId;
@@ -54,7 +59,8 @@ const AdminLogin = async function (app, { lightning, router }) {
       });
 
       connection.socket.on("message", (message: any) => {
-        if (message === "GET_LNURL") {
+        const text = message.toString();
+        if (text === "GET_LNURL") {
           const bech32Data = createLnUrlAuth(k1, `${serverDomain}/admin/api/login`);
 
           connection.socket.send(
@@ -128,13 +134,12 @@ const AdminLogin = async function (app, { lightning, router }) {
       return error;
     }
 
-    u[0][1].sessionStore.set(
-      u[0][1].sessionId,
-      {
-        authenticated: true,
-        pubkey: request.query.key,
-      },
-      (err) => console.error(err),
+    await Promise.all(
+      u.map(async ([_, user]) => {
+        user.session.set<any>("authenticated", true);
+        user.session.set<any>("pubkey", request.query.key);
+        await user.session.save();
+      }),
     );
 
     await Promise.all(

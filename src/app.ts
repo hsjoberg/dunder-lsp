@@ -1,5 +1,5 @@
 import fastify, { FastifyServerOptions } from "fastify";
-import fastifyCors from "fastify-cors";
+import fastifyCors from "@fastify/cors";
 import Long from "long";
 
 import { getInfo, estimateFee } from "./utils/lnd-api";

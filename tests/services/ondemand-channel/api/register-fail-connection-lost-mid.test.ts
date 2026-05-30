@@ -12,7 +12,7 @@ import { createForwardHtlcInterceptRequest, sendRegisterRequest } from "./regist
 import { openChannelSync, checkPeerConnected } from "../../../../mocks/utils/lnd-api";
 
 describe("/ondemand-channel/register", () => {
-  it("should fail HTLC if wallet has lost connection to the LSP (after registration)", async (done) => {
+  it("should fail HTLC if wallet has lost connection to the LSP (after registration)", async () => {
     openChannelSync.mockClear();
     const app = build();
 
@@ -90,6 +90,5 @@ describe("/ondemand-channel/register", () => {
     await timeout(500);
     htlcInterceptorStream.write = oldWrite;
     app.close();
-    done();
   });
 });

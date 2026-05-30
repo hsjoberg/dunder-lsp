@@ -14,7 +14,7 @@ const AdminChannelRequests = async function (app, { lightning, router }) {
       sort: string;
     };
   }>("/channelRequests", async (request, reply) => {
-    if (request.session.authenticated !== true) {
+    if ((request.session as any).get("authenticated") !== true) {
       reply.code(403);
       reply.send("Not authenticated");
       return;
@@ -66,7 +66,7 @@ const AdminChannelRequests = async function (app, { lightning, router }) {
       channelId: string;
     };
   }>("/channelRequests/:channelId", async (request, reply) => {
-    if (request.session.authenticated !== true) {
+    if ((request.session as any).get("authenticated") !== true) {
       reply.code(403);
       reply.send("Not authenticated");
       return;

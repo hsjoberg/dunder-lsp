@@ -13,7 +13,7 @@ import {
   LnUrlAuthQuerystring,
 } from "../../../utils/common";
 import { IErrorResponse } from "../../../services/ondemand-channel";
-import { SocketStream } from "fastify-websocket";
+import { SocketStream } from "@fastify/websocket";
 
 interface ICreateAdminLnUrlAuthRequests {
   k1: string;
@@ -31,7 +31,7 @@ const AdminAdmin = async function (app, { lightning, router }) {
       name: string;
     };
   }>("/admins", async (request, reply) => {
-    if (request.session.authenticated !== true) {
+    if ((request.session as any).get("authenticated") !== true) {
       reply.code(403);
       reply.send("Not authenticated");
       return;
@@ -51,7 +51,7 @@ const AdminAdmin = async function (app, { lightning, router }) {
       sort: string;
     };
   }>("/admins", async (request, reply) => {
-    if (request.session.authenticated !== true) {
+    if ((request.session as any).get("authenticated") !== true) {
       reply.code(403);
       reply.send("Not authenticated");
       return;
@@ -97,7 +97,7 @@ const AdminAdmin = async function (app, { lightning, router }) {
       pubkey: string;
     };
   }>("/admins/:pubkey", async (request, reply) => {
-    if (request.session.authenticated !== true) {
+    if ((request.session as any).get("authenticated") !== true) {
       reply.code(403);
       reply.send("Not authenticated");
       return;
@@ -134,7 +134,7 @@ const AdminAdmin = async function (app, { lightning, router }) {
         };
       }
 
-      if (filter.pubkey.includes(request.session.pubkey)) {
+      if (filter.pubkey.includes((request.session as any).get("pubkey"))) {
         reply.code(400);
         return {
           status: "ERROR",
@@ -161,7 +161,7 @@ const AdminAdmin = async function (app, { lightning, router }) {
       name: string;
     };
   }>("/admins/:pubkey", async (request, reply) => {
-    if (request.session.authenticated !== true) {
+    if ((request.session as any).get("authenticated") !== true) {
       reply.code(403);
       reply.send("Not authenticated");
       return;
@@ -186,7 +186,7 @@ const AdminAdmin = async function (app, { lightning, router }) {
     "/create-admin-lnurl-auth-ws",
     { websocket: true },
     async (connection: SocketStream, request: FastifyRequest) => {
-      if (request.session.authenticated !== true) {
+      if ((request.session as any).get("authenticated") !== true) {
         console.log("No session");
         connection.socket.close();
         return;

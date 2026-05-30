@@ -14,7 +14,7 @@ const AdminHtlcSettlements = async function (app, { lightning, router }) {
       sort: string;
     };
   }>("/htlcSettlements", async (request, reply) => {
-    if (request.session.authenticated !== true) {
+    if ((request.session as any).get("authenticated") !== true) {
       reply.code(403);
       reply.send("Not authenticated");
       return;
@@ -68,7 +68,7 @@ const AdminHtlcSettlements = async function (app, { lightning, router }) {
       htlcId: string;
     };
   }>("/htlcSettlements/:htlcId", async (request, reply) => {
-    if (request.session.authenticated !== true) {
+    if ((request.session as any).get("authenticated") !== true) {
       reply.code(403);
       reply.send("Not authenticated");
       return;

@@ -30,47 +30,57 @@ const Dashboard = () => {
 
   useEffect(() => {
     (async () => {
-      const channelRequestResult = await dataProvider.getList<IChannelRequest>("channelRequests", {
-        filter: {},
-        sort: { field: "start", order: "DESC" },
-        pagination: { page: 1, perPage: 100000 },
-      });
-      setChannelRequests(channelRequestResult.data);
+      try {
+        const channelRequestResult = await dataProvider.getList<IChannelRequest>("channelRequests", {
+          filter: {},
+          sort: { field: "start", order: "DESC" },
+          pagination: { page: 1, perPage: 100000 },
+        });
+        const channelRequestData = channelRequestResult?.data ?? [];
+        setChannelRequests(channelRequestData);
 
-      const htlcSettlementResult = await dataProvider.getList<IHtlcSettlement>("htlcSettlements", {
-        filter: {},
-        sort: { field: "start", order: "DESC" },
-        pagination: { page: 1, perPage: 100000 },
-      });
-      setHtlcSettlements(htlcSettlementResult.data);
+        const htlcSettlementResult = await dataProvider.getList<IHtlcSettlement>(
+          "htlcSettlements",
+          {
+            filter: {},
+            sort: { field: "start", order: "DESC" },
+            pagination: { page: 1, perPage: 100000 },
+          },
+        );
+        const htlcSettlementData = htlcSettlementResult?.data ?? [];
+        setHtlcSettlements(htlcSettlementData);
 
-      const todayResult = await dataProvider.getList<IChannelRequest>("channelRequests", {
-        filter: { custom_days: [format(new Date(), "yyyy-MM-dd")] },
-        sort: { field: "start", order: "DESC" },
-        pagination: { page: 1, perPage: 100000 },
-      });
+        const todayResult = await dataProvider.getList<IChannelRequest>("channelRequests", {
+          filter: { custom_days: [format(new Date(), "yyyy-MM-dd")] },
+          sort: { field: "start", order: "DESC" },
+          pagination: { page: 1, perPage: 100000 },
+        });
+        const todayData = todayResult?.data ?? [];
 
-      setNoRequestsToday(todayResult.data.length);
+        setNoRequestsToday(todayData.length);
 
-      const openings = todayResult.data.reduce((prev, curr) => {
-        return prev + (curr.status === "DONE" ? 1 : 0);
-      }, 0);
-      setNoOpeningsToday(openings);
+        const openings = todayData.reduce((prev, curr) => {
+          return prev + (curr.status === "DONE" ? 1 : 0);
+        }, 0);
+        setNoOpeningsToday(openings);
 
-      const expirations = todayResult.data.reduce((prev, curr) => {
-        return prev + (curr.expired ? 1 : 0);
-      }, 0);
-      setNoExpirationsToday(expirations);
+        const expirations = todayData.reduce((prev, curr) => {
+          return prev + (curr.expired ? 1 : 0);
+        }, 0);
+        setNoExpirationsToday(expirations);
 
-      const totalSats = todayResult.data.reduce((prev, curr) => {
-        return prev + (curr.status === "DONE" ? curr.expectedAmountSat : 0);
-      }, 0);
-      setTotalSatsOpened(totalSats);
+        const totalSats = todayData.reduce((prev, curr) => {
+          return prev + (curr.status === "DONE" ? curr.expectedAmountSat : 0);
+        }, 0);
+        setTotalSatsOpened(totalSats);
 
-      const unclaimedButSettledHtlcs = htlcSettlementResult.data.reduce((prev, curr) => {
-        return prev + (curr.settled && !curr.claimed ? 1 : 0);
-      }, 0);
-      setNoUnclaimedButSettledHtlcs(unclaimedButSettledHtlcs);
+        const unclaimedButSettledHtlcs = htlcSettlementData.reduce((prev, curr) => {
+          return prev + (curr.settled && !curr.claimed ? 1 : 0);
+        }, 0);
+        setNoUnclaimedButSettledHtlcs(unclaimedButSettledHtlcs);
+      } catch (error) {
+        console.error(error);
+      }
     })();
 
     return () => {
