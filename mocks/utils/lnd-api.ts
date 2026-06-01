@@ -41,6 +41,25 @@ export async function listPeers(lightning: Client) {
   return listPeersReponse;
 }
 
+let listChannelsResponse = lnrpc.ListChannelsResponse.create({ channels: [] });
+let listChannelsError: Error | null = null;
+export const __listChannels = jest.fn(async () => {
+  if (listChannelsError) {
+    throw listChannelsError;
+  }
+  return listChannelsResponse;
+});
+export const __setListChannelsResponse = (response: lnrpc.IListChannelsResponse) => {
+  listChannelsError = null;
+  listChannelsResponse = lnrpc.ListChannelsResponse.create(response);
+};
+export const __setListChannelsError = (error: Error | null) => {
+  listChannelsError = error;
+};
+export async function listChannels(lightning: Client) {
+  return __listChannels();
+}
+
 export const openChannelSync = jest.fn(() => {
   const openChannelSyncResponse = lnrpc.ChannelPoint.create({
     fundingTxidBytes: stringToUint8Array("abcdef"),

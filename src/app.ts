@@ -22,6 +22,11 @@ export default function (options?: FastifyServerOptions) {
     router,
   });
 
+  app.register(require("./services/public-forward-firewall/index"), {
+    lightning,
+    router,
+  });
+
   app.register(require("./services/admin/index"), {
     prefix: "/admin",
     lightning,

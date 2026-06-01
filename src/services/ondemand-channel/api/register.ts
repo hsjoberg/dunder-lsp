@@ -1,4 +1,4 @@
-import { Client, ClientDuplexStream } from "@grpc/grpc-js";
+import { Client } from "@grpc/grpc-js";
 import {
   IChannelRequestDB,
   checkAllHtclSettlementsSettled,
@@ -21,11 +21,16 @@ import { checkFeeTooHigh, getMaximumPaymentSat, getMinimumPaymentSat } from "./u
 import {
   checkPeerConnected,
   estimateFee,
-  htlcInterceptor,
   openChannelSync,
   subscribeHtlcEvents,
   verifyMessage,
 } from "../../../utils/lnd-api";
+import {
+  handled,
+  HtlcHandler,
+  HtlcResponseWriter,
+  noDecision,
+} from "../../htlc-interceptor";
 import { differenceInSeconds, formatISO, getUnixTime } from "date-fns";
 import { lnrpc, routerrpc } from "../../../proto";
 
@@ -66,7 +71,6 @@ export default function Register(
   // `subscribeHtlc` is used to check whether
   // the incoming payment was settled, if yes we can
   // open a channel to the requesting party.
-  interceptHtlc(db, lightning, router);
   subscribeHtlc(db, lightning);
 
   return async (request, reply) => {
@@ -197,7 +201,7 @@ export default function Register(
 // HtlcHodl uses channelId as key.
 interface HtlcHodl {
   [key: string]: {
-    stream: ClientDuplexStream<any, any>;
+    writer: HtlcResponseWriter;
     pubkey: string;
     incomingChannelId: Long;
     htlcId: Long;
@@ -220,192 +224,182 @@ const interceptedHtlcHodl: HtlcHodl = {};
  * 5. Calls `openChannelWhenHtlcsSettled` that waits from settlement feedback from subscribeChannelEvents
  *
  */
-const interceptHtlc = (db: Database, lightning: Client, router: Client) => {
+export const createOnDemandChannelHtlcHandler = (
+  db: Database,
+  lightning: Client,
+): HtlcHandler => async (request, writer) => {
   const htlcWaitMs = config.get<number>("htlcWaitMs");
   const maximumPaymentSat = getMaximumPaymentSat();
-  const stream = htlcInterceptor(router);
 
-  stream.on("data", async (data) => {
-    const request = routerrpc.ForwardHtlcInterceptRequest.decode(data);
+  // Check if this HTLC outgoing channel Id is related to a channel request.
+  // If it's not, allow the shared interceptor to continue to the next handler.
+  const channelRequest = await getChannelRequest(db, request.outgoingRequestedChanId.toString());
+  if (!channelRequest) {
+    return noDecision();
+  }
 
-    // Check if this HTLC outgoing channel Id is related to a channel request
-    // If it's not we'll resume the normal HTLC forwarding
-    const channelRequest = await getChannelRequest(db, request.outgoingRequestedChanId.toString());
-    if (!channelRequest) {
-      doActionHtlc(routerrpc.ResolveHoldForwardAction.RESUME, stream, request.incomingCircuitKey);
-      return;
-    }
+  console.log("\n\nINTERCEPTING HTLC\n-----------");
+  console.log(formatISO(new Date()));
+  console.log("outgoingAmountMsat", request.outgoingAmountMsat.toString());
+  console.log("outgoingRequestedChanId", request.outgoingRequestedChanId.toString());
+  console.log("incomingCircuitKey.chanId", request.incomingCircuitKey?.chanId?.toString());
+  console.log("incomingCircuitKey.htlcId", request.incomingCircuitKey?.htlcId?.toString());
+  console.log("outgoingAmountMsat.request.outgoingExpiry", request.outgoingExpiry.toString());
+  console.log("customRecords", JSON.stringify(request.customRecords));
 
-    console.log("\n\nINTERCEPTING HTLC\n-----------");
-    console.log(formatISO(new Date()));
-    console.log("outgoingAmountMsat", request.outgoingAmountMsat.toString());
-    console.log("outgoingRequestedChanId", request.outgoingRequestedChanId.toString());
-    console.log("incomingCircuitKey.chanId", request.incomingCircuitKey?.chanId?.toString());
-    console.log("incomingCircuitKey.htlcId", request.incomingCircuitKey?.htlcId?.toString());
-    console.log("outgoingAmountMsat.request.outgoingExpiry", request.outgoingExpiry.toString());
-    console.log("customRecords", JSON.stringify(request.customRecords));
+  // If we found this HTLC already in the database, we'll fail this HTLC.
+  // This is related to a bug in lnd where HTLCs are replayed.
+  if (
+    await getHtlcSettlement(
+      db,
+      request.outgoingRequestedChanId?.toString(),
+      request.incomingCircuitKey?.chanId?.toNumber() ?? 0,
+      request.incomingCircuitKey?.htlcId?.toNumber() ?? 0,
+    )
+  ) {
+    console.error("WARNING, already found settlement in database");
+    doActionHtlc(routerrpc.ResolveHoldForwardAction.FAIL, writer, request.incomingCircuitKey);
+    return handled();
+  }
 
-    // If we found this HTLC already in the database, we'll fail this HTLC.
-    // This is related to a bug in lnd where HTLCs are replayed.
-    if (
-      await getHtlcSettlement(
-        db,
-        request.outgoingRequestedChanId?.toString(),
-        request.incomingCircuitKey?.chanId?.toNumber() ?? 0,
-        request.incomingCircuitKey?.htlcId?.toNumber() ?? 0,
-      )
-    ) {
-      console.error("WARNING, already found settlement in database");
-      doActionHtlc(routerrpc.ResolveHoldForwardAction.FAIL, stream, request.incomingCircuitKey);
-      return;
-    }
+  console.log("MARKING UP INCOMING HTLC FOR SETTLEMENT");
 
-    console.log("MARKING UP INCOMING HTLC FOR SETTLEMENT");
+  // Check if the payment hash for the HTLC matches with the preimage that we got.
+  // Fail if it does not.
+  //
+  // We send INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS as the failure code so that probers can analyze
+  // the situation correctly.
+  // This is a violation of BOLT4, but it's not being used malicously.
+  const paymentHash = sha256(hexToUint8Array(channelRequest.preimage ?? ""));
+  if (bytesToHexString(request.paymentHash) !== paymentHash) {
+    // TODO error handling
+    console.error("Payment hash does not match");
+    doActionHtlc(
+      routerrpc.ResolveHoldForwardAction.FAIL,
+      writer,
+      request.incomingCircuitKey,
+      undefined,
+      lnrpc.Failure.FailureCode["INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS"],
+    );
+    return handled();
+  }
 
-    // Check if the payment hash for the HTLC matches with the preimage that we got.
-    // Fail if it does not.
-    //
-    // We send INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS as the failure code so that probers can analyze
-    // the situation correctly.
-    // This is a violation of BOLT4, but it's not being used malicously.
-    const paymentHash = sha256(hexToUint8Array(channelRequest.preimage ?? ""));
-    if (bytesToHexString(request.paymentHash) !== paymentHash) {
-      // TODO error handling
-      console.error("Payment hash does not match");
-      doActionHtlc(
-        routerrpc.ResolveHoldForwardAction.FAIL,
-        stream,
-        request.incomingCircuitKey,
-        undefined,
-        lnrpc.Failure.FailureCode["INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS"],
-      );
-      return;
-    }
+  // Check if the requester is connected to our Lightning node.
+  // If not, we'll fail this HTLC
+  // TODO(hsjoberg): maybe this is too harsh
+  if (!(await checkPeerConnected(lightning, channelRequest.pubkey))) {
+    console.error("Wallet node not connected");
+    doActionHtlc(routerrpc.ResolveHoldForwardAction.FAIL, writer, request.incomingCircuitKey);
+    return handled();
+  }
 
-    // Check if the requester is connected to our Lightning node.
-    // If not, we'll fail this HTLC
-    // TODO(hsjoberg): maybe this is too harsh
-    if (!checkPeerConnected(lightning, channelRequest.pubkey)) {
-      console.error("Wallet node not connected");
-      doActionHtlc(routerrpc.ResolveHoldForwardAction.FAIL, stream, request.incomingCircuitKey);
-      return;
-    }
+  const channelId = request.outgoingRequestedChanId.toString();
 
-    const channelId = request.outgoingRequestedChanId.toString();
+  // If this is the first HTLC for this outgoing channel Id that we have encountered.
+  // Create a new hodl cache and start the timeout.
+  // Once all HTLCs have been registered and settled. `openChannelWhenHtlcsSettled` will open the
+  // payment channel to the requester.
+  if (!interceptedHtlcHodl[channelId]) {
+    interceptedHtlcHodl[channelId] = [];
+    // When the first HTLC for this payment is registed,
+    // we wait until we match expected amount, then settle everything.
+    openChannelWhenHtlcsSettled(db, lightning, channelRequest, htlcWaitMs);
+  }
 
-    // If this is the first HTLC for this outgoing channel Id that we have encountered.
-    // Create a new hodl cache and start the timeout.
-    // Once all HTLCs have been registered and settled. `openChannelWhenHtlcsSettled` will open the
-    // payment channel to the requester.
-    if (!interceptedHtlcHodl[channelId]) {
-      interceptedHtlcHodl[channelId] = [];
-      // When the first HTLC for this payment is registed,
-      // we wait until we match expected amount, then settle everything.
-      openChannelWhenHtlcsSettled(db, lightning, channelRequest, htlcWaitMs);
-    }
+  // Add this HTLC to our hodl cache.
+  // A response writer is saved here. This is to be able to settle the HTLC later on
+  // in another interceptHtlc event.
+  interceptedHtlcHodl[channelId].push({
+    amountMsat: request.outgoingAmountMsat,
+    incomingChannelId: request.incomingCircuitKey?.chanId ?? Long.fromValue(0),
+    htlcId: request.incomingCircuitKey?.htlcId ?? Long.fromValue(0),
+    incomingCircuitKey: request.incomingCircuitKey!,
+    pubkey: channelRequest.pubkey,
+    writer,
+    settled: false,
+  });
 
-    // Add this HTLC to our hodl cache.
-    // A reference to the bidi-stream is saved here. This is to be able to settle the HTLC later on
-    // in another interceptHtlc event.
-    interceptedHtlcHodl[channelId].push({
-      amountMsat: request.outgoingAmountMsat,
-      incomingChannelId: request.incomingCircuitKey?.chanId ?? Long.fromValue(0),
-      htlcId: request.incomingCircuitKey?.htlcId ?? Long.fromValue(0),
-      incomingCircuitKey: request.incomingCircuitKey!,
-      pubkey: channelRequest.pubkey,
-      stream,
-      settled: false,
-    });
+  // Check if the total amount matches up:
+  const total = interceptedHtlcHodl[channelId].reduce((prev, { amountMsat }) => {
+    return prev.add(amountMsat);
+  }, Long.fromValue(0));
 
-    // Check if the total amount matches up:
-    const total = interceptedHtlcHodl[channelId].reduce((prev, { amountMsat }) => {
-      return prev.add(amountMsat);
-    }, Long.fromValue(0));
+  console.log("total", total.div(MSAT).toString());
+  console.log("expected", channelRequest.expectedAmountSat);
 
-    console.log("total", total.div(MSAT).toString());
-    console.log("expected", channelRequest.expectedAmountSat);
+  // Once the total amount matches the expected amount.
+  // We'll start the settling of HTLCs.
+  if (total.equals(Long.fromValue(channelRequest.expectedAmountSat).mul(MSAT))) {
+    console.log("Total adds up!");
 
-    // Once the total amount matches the expected amount.
-    // We'll start the settling of HTLCs.
-    if (total.equals(Long.fromValue(channelRequest.expectedAmountSat).mul(MSAT))) {
-      console.log("Total adds up!");
-
-      // Calculate how much we will subtract for fees
-      let feeResult: lnrpc.EstimateFeeResponse | undefined;
-      try {
-        // Check whether we can still do this transaction
-        feeResult = await estimateFee(lightning, Long.fromValue(maximumPaymentSat), 1);
-        if (request.outgoingAmountMsat.subtract(feeResult.feeSat.mul(MSAT)).lessThanOrEqual(0)) {
-          console.log("Too high fee");
-          for (const hodl of interceptedHtlcHodl[channelId]) {
-            doActionHtlc(
-              routerrpc.ResolveHoldForwardAction.FAIL,
-              hodl.stream,
-              hodl.incomingCircuitKey,
-            );
-          }
-        }
-      } catch (e) {
-        // TODO error handling
-        console.error("estimateFee failed", e);
+    // Calculate how much we will subtract for fees
+    let feeResult: lnrpc.EstimateFeeResponse | undefined;
+    try {
+      // Check whether we can still do this transaction
+      feeResult = await estimateFee(lightning, Long.fromValue(maximumPaymentSat), 1);
+      if (request.outgoingAmountMsat.subtract(feeResult.feeSat.mul(MSAT)).lessThanOrEqual(0)) {
+        console.log("Too high fee");
         for (const hodl of interceptedHtlcHodl[channelId]) {
           doActionHtlc(
             routerrpc.ResolveHoldForwardAction.FAIL,
-            hodl.stream,
+            hodl.writer,
             hodl.incomingCircuitKey,
           );
         }
-        return;
+        return handled();
       }
-      const estimatedFeeMsat = feeResult.feeSat.mul(MSAT);
-
+    } catch (e) {
+      // TODO error handling
+      console.error("estimateFee failed", e);
       for (const hodl of interceptedHtlcHodl[channelId]) {
-        console.log("Settling part HTLC", hodl.htlcId.toString());
-        // Send settlement action to bidi-stream
         doActionHtlc(
-          routerrpc.ResolveHoldForwardAction.SETTLE,
-          hodl.stream,
+          routerrpc.ResolveHoldForwardAction.FAIL,
+          hodl.writer,
           hodl.incomingCircuitKey,
-          channelRequest.preimage,
         );
-
-        // Create a settlement record in the database.
-        // `settled` is set to 0 (false) here because we are waiting for `subscribeHtlc` to
-        // acknowledge the settlement.
-        await createHtlcSettlement(db, {
-          channelId: request.outgoingRequestedChanId.toString(),
-          incomingChannelId: hodl.incomingChannelId.toNumber(),
-          htlcId: hodl.htlcId.toNumber(),
-          amountSat: hodl.amountMsat.div(MSAT).toNumber(),
-          settled: 0,
-          claimed: 0,
-        });
       }
+      return handled();
     }
-  });
+    for (const hodl of interceptedHtlcHodl[channelId]) {
+      console.log("Settling part HTLC", hodl.htlcId.toString());
+      // Send settlement action to bidi-stream
+      doActionHtlc(
+        routerrpc.ResolveHoldForwardAction.SETTLE,
+        hodl.writer,
+        hodl.incomingCircuitKey,
+        channelRequest.preimage,
+      );
 
-  // TODO(hsjoberg)
-  stream.on("error", (error) => {
-    console.log("error");
-    console.log(error);
-  });
+      // Create a settlement record in the database.
+      // `settled` is set to 0 (false) here because we are waiting for `subscribeHtlc` to
+      // acknowledge the settlement.
+      await createHtlcSettlement(db, {
+        channelId: request.outgoingRequestedChanId.toString(),
+        incomingChannelId: hodl.incomingChannelId.toNumber(),
+        htlcId: hodl.htlcId.toNumber(),
+        amountSat: hodl.amountMsat.div(MSAT).toNumber(),
+        settled: 0,
+        claimed: 0,
+      });
+    }
+  }
+
+  return handled();
 };
 
 const doActionHtlc = (
   action: routerrpc.ResolveHoldForwardAction,
-  stream: ClientDuplexStream<any, any>,
+  writer: HtlcResponseWriter,
   incomingCircuitKey: routerrpc.ForwardHtlcInterceptRequest["incomingCircuitKey"],
   preimage?: string,
   failureCode?: lnrpc.Failure.FailureCode,
 ) => {
-  const settleResponse = routerrpc.ForwardHtlcInterceptResponse.encode({
+  writer.respond(
     action,
     incomingCircuitKey,
-    preimage:
-      action === routerrpc.ResolveHoldForwardAction.SETTLE ? hexToUint8Array(preimage!) : undefined,
+    action === routerrpc.ResolveHoldForwardAction.SETTLE ? hexToUint8Array(preimage!) : undefined,
     failureCode,
-  }).finish();
-  stream.write(settleResponse);
+  );
 };
 
 /**
@@ -443,7 +437,7 @@ async function openChannelWhenHtlcsSettled(
             console.warn("Rejecting", hodl.htlcId.toString());
             doActionHtlc(
               routerrpc.ResolveHoldForwardAction.FAIL,
-              hodl.stream,
+              hodl.writer,
               hodl.incomingCircuitKey,
             );
           }

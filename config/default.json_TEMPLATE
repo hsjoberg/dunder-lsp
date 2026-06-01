@@ -18,5 +18,6 @@
     "adminMacaroon": "~/.lnd/data/chain/bitcoin/regtest/admin.macaroon"
   },
   "allowZeroConfChannels": true,
-  "allowTaprootChannels": true
+  "allowTaprootChannels": true,
+  "rejectPublicPublicHtlcForwards": false
 }

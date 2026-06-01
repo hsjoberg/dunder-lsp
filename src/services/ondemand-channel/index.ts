@@ -8,6 +8,8 @@ import CheckStatus from "./api/check-status";
 import AutoHeal from "./api/misc/auto-heal";
 import Claim from "./api/claim";
 import getDb from "../../db/db";
+import { startHtlcInterceptor } from "../htlc-interceptor";
+import { createOnDemandChannelHtlcHandler } from "./api/register";
 
 export interface IErrorResponse {
   status: "ERROR";
@@ -18,6 +20,13 @@ const OnDemandChannel = async function (app, { lightning, router }) {
   const db = await getDb();
   // Figure out the pubkey of our own node
   const servicePubKey = (await getInfo(lightning)).identityPubkey;
+  const unregisterHtlcHandler = startHtlcInterceptor(router).registerHandler(
+    createOnDemandChannelHtlcHandler(db, lightning),
+  );
+
+  app.addHook("onClose", async () => {
+    unregisterHtlcHandler();
+  });
 
   app.get("/service-status", ServiceStatus(lightning, servicePubKey));
   app.post("/register", Register(db, lightning, router, servicePubKey));

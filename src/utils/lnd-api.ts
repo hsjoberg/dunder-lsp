@@ -5,6 +5,8 @@ import { lnrpc, routerrpc } from "../proto";
 import Long from "long";
 import { grpcMakeUnaryRequest } from "./grpc";
 
+const feeEstimateAddressesByClient = new WeakMap<Client, [string, string]>();
+
 export async function getInfo(lightning: Client) {
   const getInfoRequest = lnrpc.GetInfoRequest.encode({}).finish();
   const response = await grpcMakeUnaryRequest<lnrpc.GetInfoResponse>(
@@ -17,10 +19,11 @@ export async function getInfo(lightning: Client) {
 }
 
 export async function estimateFee(lightning: Client, amount: Long, targetConf: number) {
+  const [feeEstimateAddress, changeEstimateAddress] = await getFeeEstimateAddresses(lightning);
   const estimateFeeRequest = lnrpc.EstimateFeeRequest.encode({
     AddrToAmount: {
-      bc1qwljx57mxh2pmh2hgwkhp6z4077s0g8q2s0hh8p: amount,
-      bc1q0aptdcqgpwm63y3p0sl6g2qjdjc2keymdkxzum: Long.fromValue(10000),
+      [feeEstimateAddress]: amount,
+      [changeEstimateAddress]: Long.fromValue(10_000),
     },
     targetConf,
   }).finish();
@@ -32,6 +35,32 @@ export async function estimateFee(lightning: Client, amount: Long, targetConf: n
     lnrpc.EstimateFeeResponse.decode,
   );
   return response;
+}
+
+export async function newAddress(lightning: Client) {
+  const newAddressRequest = lnrpc.NewAddressRequest.encode({
+    type: lnrpc.AddressType.WITNESS_PUBKEY_HASH,
+  }).finish();
+  const response = await grpcMakeUnaryRequest<lnrpc.NewAddressResponse>(
+    lightning,
+    "/lnrpc.Lightning/NewAddress",
+    newAddressRequest,
+    lnrpc.NewAddressResponse.decode,
+  );
+  return response;
+}
+
+async function getFeeEstimateAddresses(lightning: Client) {
+  const cachedAddresses = feeEstimateAddressesByClient.get(lightning);
+  if (cachedAddresses) {
+    return cachedAddresses;
+  }
+
+  const firstAddress = await newAddress(lightning);
+  const secondAddress = await newAddress(lightning);
+  const addresses: [string, string] = [firstAddress.address, secondAddress.address];
+  feeEstimateAddressesByClient.set(lightning, addresses);
+  return addresses;
 }
 
 export async function verifyMessage(lightning: Client, message: string, signature: string) {
@@ -55,6 +84,19 @@ export async function listPeers(lightning: Client) {
     "/lnrpc.Lightning/ListPeers",
     listPeersRequest,
     lnrpc.ListPeersResponse.decode,
+  );
+  return response;
+}
+
+export async function listChannels(lightning: Client) {
+  const listChannelsRequest = lnrpc.ListChannelsRequest.encode({
+    peerAliasLookup: false,
+  }).finish();
+  const response = await grpcMakeUnaryRequest<lnrpc.ListChannelsResponse>(
+    lightning,
+    "/lnrpc.Lightning/ListChannels",
+    listChannelsRequest,
+    lnrpc.ListChannelsResponse.decode,
   );
   return response;
 }
