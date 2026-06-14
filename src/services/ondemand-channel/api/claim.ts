@@ -11,6 +11,7 @@ import { IErrorResponse } from "../index";
 import Long from "long";
 import { RouteHandlerMethod } from "fastify";
 import { bytesToHexString } from "../../../utils/common";
+import { withClaimChannelOpenLock } from "./claim-channel-open-lock";
 import config from "config";
 import { getMaximumPaymentSat } from "./utils";
 
@@ -61,9 +62,43 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
       amountSat: unclaimed,
     } as IClaimResponse);
 
-    // Only attempt a zero conf channel if the config allows it
-    if (!!allowZeroConfChannels) {
-      console.log("Opening zero-conf channel");
+    const startedChannelOpen = await withClaimChannelOpenLock(claimRequest.pubkey, async () => {
+      const unclaimed = await getChannelRequestUnclaimedAmount(db, claimRequest.pubkey);
+      if (unclaimed === 0) {
+        return;
+      }
+
+      // Only attempt a zero conf channel if the config allows it
+      if (!!allowZeroConfChannels) {
+        console.log("Opening zero-conf channel", { pubkey: claimRequest.pubkey });
+        try {
+          const result = await openChannelSync(
+            lightning,
+            claimRequest.pubkey,
+            Long.fromValue(maximumPaymentSat).add(10_000),
+            Long.fromValue(unclaimed),
+            true,
+            true,
+            true,
+            allowTaprootChannels,
+          );
+          const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
+          await updateChannelRequestSetAllRegisteredAsDone(
+            db,
+            claimRequest.pubkey,
+            `${txId}:${result.outputIndex}`,
+          );
+          await updateHtlcSettlementSetAllAsClaimed(db, claimRequest.pubkey);
+
+          // Return early if the channel open succeeds.
+          return;
+        } catch (error) {
+          console.error("Could not open zero-conf channel", error);
+        }
+      }
+
+      // If the zero conf attempt fails, attempt a regular channel
+      console.log("Opening regular channel", { pubkey: claimRequest.pubkey });
       try {
         const result = await openChannelSync(
           lightning,
@@ -72,7 +107,7 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
           Long.fromValue(unclaimed),
           true,
           true,
-          true,
+          false,
           allowTaprootChannels,
         );
         const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
@@ -82,38 +117,14 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
           `${txId}:${result.outputIndex}`,
         );
         await updateHtlcSettlementSetAllAsClaimed(db, claimRequest.pubkey);
-
-        // Return early if the channel open succeeds.
-        return;
       } catch (error) {
-        console.error("Could not open zero-conf channel", error);
+        console.error("Could not open regular channel", error);
       }
-    }
+    });
 
-    // If the zero conf attempt fails, attempt a regular channel
-    console.log("Opening regular channel");
-    try {
-      const result = await openChannelSync(
-        lightning,
-        claimRequest.pubkey,
-        Long.fromValue(maximumPaymentSat).add(10_000),
-        Long.fromValue(unclaimed),
-        true,
-        true,
-        false,
-        allowTaprootChannels,
-      );
-      const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
-      await updateChannelRequestSetAllRegisteredAsDone(
-        db,
-        claimRequest.pubkey,
-        `${txId}:${result.outputIndex}`,
-      );
-      await updateHtlcSettlementSetAllAsClaimed(db, claimRequest.pubkey);
-
+    if (!startedChannelOpen) {
+      console.log("Claim channel open already in progress", { pubkey: claimRequest.pubkey });
       return;
-    } catch (error) {
-      console.error("Could not open regular channel", error);
     }
   };
 }

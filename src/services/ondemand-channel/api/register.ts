@@ -466,7 +466,7 @@ async function openChannelWhenHtlcsSettled(
         console.error("Peer not online");
       }
 
-      console.log("Opening channel");
+      console.log("Opening channel", { pubkey: channelRequest.pubkey });
       try {
         // Calculate how much we will subtract for fees
         let feeResult: lnrpc.EstimateFeeResponse | undefined;
