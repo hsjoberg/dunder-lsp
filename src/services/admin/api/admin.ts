@@ -4,7 +4,13 @@ import secp256k1 from "secp256k1";
 import config from "config";
 
 import getDb from "../../../db/db";
-import { createAdmin, deleteAdmins, getAdmins, updateAdmins } from "../../../db/admin";
+import {
+  checkAdminPubkey,
+  createAdmin,
+  deleteAdmins,
+  getAdmins,
+  updateAdmins,
+} from "../../../db/admin";
 import {
   bytesToHexString,
   createLnUrlAuth,
@@ -14,9 +20,11 @@ import {
 } from "../../../utils/common";
 import { IErrorResponse } from "../../../services/ondemand-channel";
 import { SocketStream } from "@fastify/websocket";
+import { requireAuthenticatedAdmin } from "./auth";
 
 interface ICreateAdminLnUrlAuthRequests {
   k1: string;
+  actorPubkey: string;
   callback: (pubkey: string) => void;
 }
 
@@ -31,9 +39,7 @@ const AdminAdmin = async function (app, { lightning, router }) {
       name: string;
     };
   }>("/admins", async (request, reply) => {
-    if ((request.session as any).get("authenticated") !== true) {
-      reply.code(403);
-      reply.send("Not authenticated");
+    if (!(await requireAuthenticatedAdmin(db, request, reply))) {
       return;
     }
 
@@ -51,9 +57,7 @@ const AdminAdmin = async function (app, { lightning, router }) {
       sort: string;
     };
   }>("/admins", async (request, reply) => {
-    if ((request.session as any).get("authenticated") !== true) {
-      reply.code(403);
-      reply.send("Not authenticated");
+    if (!(await requireAuthenticatedAdmin(db, request, reply))) {
       return;
     }
 
@@ -97,9 +101,7 @@ const AdminAdmin = async function (app, { lightning, router }) {
       pubkey: string;
     };
   }>("/admins/:pubkey", async (request, reply) => {
-    if ((request.session as any).get("authenticated") !== true) {
-      reply.code(403);
-      reply.send("Not authenticated");
+    if (!(await requireAuthenticatedAdmin(db, request, reply))) {
       return;
     }
 
@@ -117,40 +119,71 @@ const AdminAdmin = async function (app, { lightning, router }) {
       filter: string;
     };
   }>("/admins", async (request, reply) => {
-    if (request.query.filter) {
-      const filter = JSON.parse(request.query.filter);
+    const actorPubkey = await requireAuthenticatedAdmin(db, request, reply);
+    if (!actorPubkey) {
+      console.warn("Rejected unauthenticated administrator deletion", {
+        remoteAddress: request.ip,
+        userAgent: request.headers["user-agent"],
+      });
+      return;
+    }
 
-      // id means pubkey
-      if (filter.id) {
-        filter.pubkey = filter.id;
-        delete filter.id;
-      }
-
-      if (!filter.pubkey) {
-        reply.code(400);
-        return {
-          status: "ERROR",
-          message: "Missing filter",
-        };
-      }
-
-      if (filter.pubkey.includes((request.session as any).get("pubkey"))) {
-        reply.code(400);
-        return {
-          status: "ERROR",
-          message: "You cannot delete yourself.",
-        };
-      }
-
-      await deleteAdmins(db, filter);
-      return filter.pubkey;
-    } else {
+    if (!request.query.filter) {
       reply.code(400);
       return {
         status: "ERROR",
         message: "Missing filter",
       };
     }
+
+    let filter: unknown;
+    try {
+      filter = JSON.parse(request.query.filter);
+    } catch {
+      reply.code(400);
+      return {
+        status: "ERROR",
+        message: "Invalid filter",
+      };
+    }
+
+    if (!filter || typeof filter !== "object") {
+      reply.code(400);
+      return {
+        status: "ERROR",
+        message: "Invalid filter",
+      };
+    }
+
+    const rawPubkeys = (filter as any).pubkey ?? (filter as any).id;
+    const pubkeys = [...new Set(Array.isArray(rawPubkeys) ? rawPubkeys : [rawPubkeys])];
+    if (
+      pubkeys.length === 0 ||
+      pubkeys.length > 100 ||
+      pubkeys.some((pubkey) => typeof pubkey !== "string" || pubkey.length === 0)
+    ) {
+      reply.code(400);
+      return {
+        status: "ERROR",
+        message: "Invalid administrator pubkey filter",
+      };
+    }
+
+    if (pubkeys.includes(actorPubkey)) {
+      reply.code(400);
+      return {
+        status: "ERROR",
+        message: "You cannot delete yourself.",
+      };
+    }
+
+    await deleteAdmins(db, pubkeys as string[]);
+    console.warn("Administrators deleted", {
+      actorPubkey,
+      targetPubkeys: pubkeys,
+      remoteAddress: request.ip,
+    });
+    return pubkeys;
   });
 
   app.put<{
@@ -161,9 +194,7 @@ const AdminAdmin = async function (app, { lightning, router }) {
       name: string;
     };
   }>("/admins/:pubkey", async (request, reply) => {
-    if ((request.session as any).get("authenticated") !== true) {
-      reply.code(403);
-      reply.send("Not authenticated");
+    if (!(await requireAuthenticatedAdmin(db, request, reply))) {
       return;
     }
 
@@ -186,7 +217,13 @@ const AdminAdmin = async function (app, { lightning, router }) {
     "/create-admin-lnurl-auth-ws",
     { websocket: true },
     async (connection: SocketStream, request: FastifyRequest) => {
-      if ((request.session as any).get("authenticated") !== true) {
+      const session = request.session as any;
+      const sessionPubkey = session.get("pubkey");
+      if (
+        session.get("authenticated") !== true ||
+        typeof sessionPubkey !== "string" ||
+        !(await checkAdminPubkey(db, sessionPubkey))
+      ) {
         console.log("No session");
         connection.socket.close();
         return;
@@ -201,6 +238,7 @@ const AdminAdmin = async function (app, { lightning, router }) {
         // Add request to our array of current requests
         createAdminLnUrlAuthRequests.push({
           k1,
+          actorPubkey: sessionPubkey,
           callback: resolve,
         });
 
@@ -240,6 +278,18 @@ const AdminAdmin = async function (app, { lightning, router }) {
       const error: IErrorResponse = {
         status: "ERROR",
         reason: "Couldn't find the corresponding session.",
+      };
+      return error;
+    }
+
+    if (!(await checkAdminPubkey(db, req.actorPubkey))) {
+      createAdminLnUrlAuthRequests = createAdminLnUrlAuthRequests.filter(
+        (pendingRequest) => pendingRequest.k1 !== request.query.k1,
+      );
+      reply.code(403);
+      const error: IErrorResponse = {
+        status: "ERROR",
+        reason: "The administrator session that created this request is no longer authorized.",
       };
       return error;
     }

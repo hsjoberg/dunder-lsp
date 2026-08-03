@@ -3,6 +3,7 @@ import { Client } from "@grpc/grpc-js";
 
 import getDb from "../../../db/db";
 import { getChannelRequests, getChannelRequestTotal } from "../../../db/ondemand-channel-admin";
+import { requireAuthenticatedAdmin } from "./auth";
 
 const AdminChannelRequests = async function (app, { lightning, router }) {
   const db = await getDb();
@@ -14,9 +15,7 @@ const AdminChannelRequests = async function (app, { lightning, router }) {
       sort: string;
     };
   }>("/channelRequests", async (request, reply) => {
-    if ((request.session as any).get("authenticated") !== true) {
-      reply.code(403);
-      reply.send("Not authenticated");
+    if (!(await requireAuthenticatedAdmin(db, request, reply))) {
       return;
     }
 
@@ -66,9 +65,7 @@ const AdminChannelRequests = async function (app, { lightning, router }) {
       channelId: string;
     };
   }>("/channelRequests/:channelId", async (request, reply) => {
-    if ((request.session as any).get("authenticated") !== true) {
-      reply.code(403);
-      reply.send("Not authenticated");
+    if (!(await requireAuthenticatedAdmin(db, request, reply))) {
       return;
     }
 

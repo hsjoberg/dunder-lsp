@@ -48,12 +48,14 @@ export async function getAdmins(
   return await db.all<IAdminDB[]>(sql, {});
 }
 
-export async function deleteAdmins(db: Database, filters?: { [key: string]: any | any[] }) {
-  const sql = SQL`
-    DELETE
-    FROM admin `;
-  sqlFixFilterSortRange(sql, filters, undefined, undefined);
-  return await db.run(sql, {});
+export async function deleteAdmins(db: Database, pubkeys: string[]) {
+  const uniquePubkeys = [...new Set(pubkeys)];
+  if (uniquePubkeys.length === 0) {
+    throw new Error("At least one administrator pubkey is required");
+  }
+
+  const placeholders = uniquePubkeys.map(() => "?").join(", ");
+  return db.run(`DELETE FROM admin WHERE pubkey IN (${placeholders})`, uniquePubkeys);
 }
 
 export async function updateAdmins(db: Database, admin: IAdminDB) {

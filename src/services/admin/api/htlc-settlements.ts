@@ -3,6 +3,7 @@ import { Client } from "@grpc/grpc-js";
 
 import getDb from "../../../db/db";
 import { getHtlcSettlements, getHtlcSettlementsTotal } from "../../../db/ondemand-channel-admin";
+import { requireAuthenticatedAdmin } from "./auth";
 
 const AdminHtlcSettlements = async function (app, { lightning, router }) {
   const db = await getDb();
@@ -14,9 +15,7 @@ const AdminHtlcSettlements = async function (app, { lightning, router }) {
       sort: string;
     };
   }>("/htlcSettlements", async (request, reply) => {
-    if ((request.session as any).get("authenticated") !== true) {
-      reply.code(403);
-      reply.send("Not authenticated");
+    if (!(await requireAuthenticatedAdmin(db, request, reply))) {
       return;
     }
 
@@ -68,9 +67,7 @@ const AdminHtlcSettlements = async function (app, { lightning, router }) {
       htlcId: string;
     };
   }>("/htlcSettlements/:htlcId", async (request, reply) => {
-    if ((request.session as any).get("authenticated") !== true) {
-      reply.code(403);
-      reply.send("Not authenticated");
+    if (!(await requireAuthenticatedAdmin(db, request, reply))) {
       return;
     }
 
