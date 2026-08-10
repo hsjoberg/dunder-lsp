@@ -1,23 +1,16 @@
-import { checkPeerConnected, openChannelSync, verifyMessage } from "../../../utils/lnd-api";
-import {
-  getChannelRequestUnclaimedAmount,
-  updateChannelRequestSetAllRegisteredAsDone,
-  updateHtlcSettlementSetAllAsClaimed,
-} from "../../../db/ondemand-channel";
-
 import { Client } from "@grpc/grpc-js";
-import { Database } from "sqlite";
-import { IErrorResponse } from "../index";
-import Long from "long";
-import { RouteHandlerMethod } from "fastify";
-import { bytesToHexString } from "../../../utils/common";
-import { withClaimChannelOpenLock } from "./claim-channel-open-lock";
 import config from "config";
-import { getMaximumPaymentSat } from "./utils";
+import { RouteHandlerMethod } from "fastify";
+import { Database } from "sqlite";
+
+import { getChannelRequestUnclaimedAmount } from "../../../db/ondemand-channel";
+import { checkPeerConnected, verifyMessage } from "../../../utils/lnd-api";
+import { openChannelForSettledHtlcs } from "../channel-open";
+import { IErrorResponse } from "../index";
 
 export interface IClaimRequest {
   pubkey: string;
-  signature: string; // Message has to be REGISTER base64
+  signature: string; // Message has to be CLAIM base64
 }
 
 export interface IClaimResponse {
@@ -27,7 +20,6 @@ export interface IClaimResponse {
 
 export default function Claim(db: Database, lightning: Client): RouteHandlerMethod {
   return async (request, reply) => {
-    const maximumPaymentSat = getMaximumPaymentSat();
     const claimRequest = JSON.parse(request.body as string) as IClaimRequest;
     const allowZeroConfChannels = config.get<boolean>("allowZeroConfChannels") || false;
     const allowTaprootChannels = config.get<boolean>("allowTaprootChannels") || false;
@@ -56,75 +48,35 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
     }
 
     const unclaimed = await getChannelRequestUnclaimedAmount(db, claimRequest.pubkey);
-
     reply.send({
       status: "OK",
       amountSat: unclaimed,
     } as IClaimResponse);
-
-    const startedChannelOpen = await withClaimChannelOpenLock(claimRequest.pubkey, async () => {
-      const unclaimed = await getChannelRequestUnclaimedAmount(db, claimRequest.pubkey);
-      if (unclaimed === 0) {
-        return;
-      }
-
-      // Only attempt a zero conf channel if the config allows it
-      if (!!allowZeroConfChannels) {
-        console.log("Opening zero-conf channel", { pubkey: claimRequest.pubkey });
-        try {
-          const result = await openChannelSync(
-            lightning,
-            claimRequest.pubkey,
-            Long.fromValue(maximumPaymentSat).add(10_000),
-            Long.fromValue(unclaimed),
-            true,
-            true,
-            true,
-            allowTaprootChannels,
-          );
-          const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
-          await updateChannelRequestSetAllRegisteredAsDone(
-            db,
-            claimRequest.pubkey,
-            `${txId}:${result.outputIndex}`,
-          );
-          await updateHtlcSettlementSetAllAsClaimed(db, claimRequest.pubkey);
-
-          // Return early if the channel open succeeds.
-          return;
-        } catch (error) {
-          console.error("Could not open zero-conf channel", error);
-        }
-      }
-
-      // If the zero conf attempt fails, attempt a regular channel
-      console.log("Opening regular channel", { pubkey: claimRequest.pubkey });
-      try {
-        const result = await openChannelSync(
-          lightning,
-          claimRequest.pubkey,
-          Long.fromValue(maximumPaymentSat).add(10_000),
-          Long.fromValue(unclaimed),
-          true,
-          true,
-          false,
-          allowTaprootChannels,
-        );
-        const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
-        await updateChannelRequestSetAllRegisteredAsDone(
-          db,
-          claimRequest.pubkey,
-          `${txId}:${result.outputIndex}`,
-        );
-        await updateHtlcSettlementSetAllAsClaimed(db, claimRequest.pubkey);
-      } catch (error) {
-        console.error("Could not open regular channel", error);
-      }
-    });
-
-    if (!startedChannelOpen) {
-      console.log("Claim channel open already in progress", { pubkey: claimRequest.pubkey });
+    if (unclaimed === 0) {
       return;
+    }
+
+    try {
+      const result = await openChannelForSettledHtlcs({
+        db,
+        lightning,
+        pubkey: claimRequest.pubkey,
+        source: "CLAIM",
+        spendUnconfirmed: true,
+        zeroConf: allowZeroConfChannels,
+        taprootChannel: allowTaprootChannels,
+      });
+      if (result.status !== "OPENED" && result.status !== "NO_SETTLEMENTS") {
+        console.warn("Claim channel open did not complete", {
+          pubkey: claimRequest.pubkey,
+          status: result.status,
+        });
+      }
+    } catch (error) {
+      // Preserve the existing claim API contract. The amount remains
+      // unclaimed and a later claim/auto-heal can retry unless a durable
+      // OPENING/UNKNOWN attempt was already recorded.
+      console.error("Could not open claim channel", error);
     }
   };
 }

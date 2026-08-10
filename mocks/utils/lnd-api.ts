@@ -60,6 +60,17 @@ export async function listChannels(lightning: Client) {
   return __listChannels();
 }
 
+let pendingChannelsResponse = lnrpc.PendingChannelsResponse.create({
+  pendingOpenChannels: [],
+});
+export const __pendingChannels = jest.fn(async () => pendingChannelsResponse);
+export const __setPendingChannelsResponse = (response: lnrpc.IPendingChannelsResponse) => {
+  pendingChannelsResponse = lnrpc.PendingChannelsResponse.create(response);
+};
+export async function pendingChannels(lightning: Client) {
+  return __pendingChannels();
+}
+
 export const openChannelSync = jest.fn(() => {
   const openChannelSyncResponse = lnrpc.ChannelPoint.create({
     fundingTxidBytes: stringToUint8Array("abcdef"),

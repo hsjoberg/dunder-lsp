@@ -1,24 +1,16 @@
-import {
-  getChannelRequestUnclaimedAmount,
-  updateChannelRequestSetAllRegisteredAsDone,
-  updateHtlcSettlementSetAllAsClaimed,
-} from "../../../../db/ondemand-channel";
-import { openChannelSync, pendingChannels, subscribePeerEvents } from "../../../../utils/lnd-api";
-
 import { Client } from "@grpc/grpc-js";
 import { Database } from "sqlite";
-import Long from "long";
-import { bytesToHexString } from "../../../../utils/common";
-import { withClaimChannelOpenLock } from "../claim-channel-open-lock";
-import { getMaximumPaymentSat } from "../utils";
+
 import { lnrpc } from "../../../../proto";
+import { subscribePeerEvents } from "../../../../utils/lnd-api";
+import { openChannelForSettledHtlcs } from "../../channel-open";
 
 /**
- * AutoHeal automatically opens a channel to a peer that has settled but non-claimed HTLCs
- * TODO test
+ * AutoHeal automatically opens a channel to a peer that has settled but
+ * non-claimed HTLCs.
+ * TODO test the peer-event integration
  */
-export default function AutoHeal(db: Database, lightning: Client, router: Client) {
-  const maximumPaymentSat = getMaximumPaymentSat();
+export default function AutoHeal(db: Database, lightning: Client, _router: Client) {
   const stream = subscribePeerEvents(lightning);
 
   stream.on("data", async (data) => {
@@ -28,54 +20,24 @@ export default function AutoHeal(db: Database, lightning: Client, router: Client
       return;
     }
 
-    const startedChannelOpen = await withClaimChannelOpenLock(peerEvent.pubKey, async () => {
-      const unclaimed = await getChannelRequestUnclaimedAmount(db, peerEvent.pubKey);
-      if (unclaimed === 0) {
-        return;
-      }
-
-      // Check if there are currently any pending channels for the user.
-      // If so, don't do anything.
-      const pendingChans = await pendingChannels(lightning);
-      if (
-        pendingChans.pendingOpenChannels.find(
-          (pendingChan) => pendingChan.channel?.remoteNodePub === peerEvent.pubKey,
-        )
-      ) {
-        return;
-      }
-
-      try {
-        const localFunding = Long.fromValue(maximumPaymentSat).add(10_000);
-        const pushAmount = Long.fromValue(unclaimed);
-        console.log("Autoheal: opening channel", { pubkey: peerEvent.pubKey });
-        const result = await openChannelSync(
-          lightning,
-          peerEvent.pubKey,
-          localFunding,
-          pushAmount,
-          true,
-          false,
-          false,
-          false,
-        );
-        const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
-        await updateChannelRequestSetAllRegisteredAsDone(
-          db,
-          peerEvent.pubKey,
-          `${txId}:${result.outputIndex}`,
-        );
-        await updateHtlcSettlementSetAllAsClaimed(db, peerEvent.pubKey);
-      } catch (error) {
-        console.error("Autoheal: Could not open channel", error);
-      }
-    });
-
-    if (!startedChannelOpen) {
-      console.log("Autoheal: claim channel open already in progress", {
+    try {
+      const result = await openChannelForSettledHtlcs({
+        db,
+        lightning,
         pubkey: peerEvent.pubKey,
+        source: "AUTO_HEAL",
+        spendUnconfirmed: false,
+        zeroConf: false,
+        taprootChannel: false,
       });
-      return;
+      if (result.status !== "OPENED" && result.status !== "NO_SETTLEMENTS") {
+        console.warn("Autoheal: channel open did not complete", {
+          pubkey: peerEvent.pubKey,
+          status: result.status,
+        });
+      }
+    } catch (error) {
+      console.error("Autoheal: Could not open channel", error);
     }
   });
 }

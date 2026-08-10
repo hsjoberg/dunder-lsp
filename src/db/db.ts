@@ -31,3 +31,48 @@ export async function commit(db: Database) {
   await db.run("COMMIT");
   return;
 }
+
+const transactionTails = new WeakMap<Database, Promise<void>>();
+
+/**
+ * Serialize application-managed transactions per sqlite connection and take a
+ * write reservation up front. BEGIN IMMEDIATE also protects the reservation
+ * invariant when more than one Dunder process uses the same sqlite database.
+ */
+export async function withImmediateTransaction<T>(
+  db: Database,
+  callback: () => Promise<T>,
+): Promise<T> {
+  const previous = transactionTails.get(db) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => current);
+  transactionTails.set(db, tail);
+
+  await previous;
+  let transactionStarted = false;
+  try {
+    await db.exec("BEGIN IMMEDIATE");
+    transactionStarted = true;
+    const result = await callback();
+    await db.exec("COMMIT");
+    transactionStarted = false;
+    return result;
+  } catch (error) {
+    if (transactionStarted) {
+      try {
+        await db.exec("ROLLBACK");
+      } catch (rollbackError) {
+        console.error("Could not roll back sqlite transaction", rollbackError);
+      }
+    }
+    throw error;
+  } finally {
+    release();
+    if (transactionTails.get(db) === tail) {
+      transactionTails.delete(db);
+    }
+  }
+}

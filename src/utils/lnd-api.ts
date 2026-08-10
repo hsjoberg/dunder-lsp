@@ -110,6 +110,7 @@ export async function openChannelSync(
   spendUnconfirmed: boolean,
   zeroConf: boolean,
   taprootChannel: boolean,
+  memo?: string,
 ) {
   const commitmentType = taprootChannel ? lnrpc.CommitmentType.SIMPLE_TAPROOT : lnrpc.CommitmentType.ANCHORS;
 
@@ -123,6 +124,7 @@ export async function openChannelSync(
     spendUnconfirmed,
     zeroConf,
     commitmentType,
+    memo,
   }).finish();
 
   return await grpcMakeUnaryRequest<lnrpc.ChannelPoint>(

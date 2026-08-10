@@ -1,4 +1,7 @@
 import { Database } from "sqlite";
+import Long from "long";
+
+import { MSAT } from "../utils/constants";
 
 export type ChannelRequestStatus =
   | "NOT_REGISTERED"
@@ -16,6 +19,7 @@ export interface IChannelRequestDB {
   expire: number;
   expectedAmountSat: number;
   channelPoint: string | null;
+  automaticOpenQueued?: number;
 }
 
 export interface IHtlcSettlementDB {
@@ -23,8 +27,10 @@ export interface IHtlcSettlementDB {
   incomingChannelId: number;
   htlcId: number;
   amountSat: number;
+  amountMsat?: string | null;
   settled: number;
   claimed: number;
+  channelOpenAttemptId?: string | null;
 }
 
 export async function createChannelRequest(
@@ -50,7 +56,8 @@ export async function createChannelRequest(
         status,
         expire,
         expectedAmountSat,
-        channelPoint
+        channelPoint,
+        automaticOpenQueued
       )
     VALUES
       (
@@ -61,7 +68,8 @@ export async function createChannelRequest(
         $status,
         $expire,
         $expectedAmountSat,
-        $channelPoint
+        $channelPoint,
+        1
       )
     `,
     {
@@ -107,24 +115,6 @@ export async function updateChannelRequest(
   );
 }
 
-export async function updateChannelRequestSetAllRegisteredAsDone(
-  db: Database,
-  pubkey: string,
-  channelPoint: string,
-) {
-  await db.run(
-    `UPDATE channelRequest
-    SET channelPoint = $channelPoint, status = $statusDone
-    WHERE status = $statusRegistered AND pubkey = $pubkey`,
-    {
-      $channelPoint: channelPoint,
-      $statusDone: "DONE",
-      $statusRegistered: "REGISTERED",
-      $pubkey: pubkey,
-    },
-  );
-}
-
 export function getActiveChannelRequestsByPubkey(db: Database, pubkey: string) {
   return db.all<IChannelRequestDB[]>(`SELECT * FROM channelRequest WHERE $pubkey = pubkey`, {
     $pubkey: pubkey,
@@ -138,8 +128,8 @@ export function getChannelRequest(db: Database, channelId: string) {
 }
 
 export async function getChannelRequestUnclaimedAmount(db: Database, pubkey: string) {
-  const result = await db.get<{ amountSat: number }>(
-    `SELECT SUM(htlcSettlement.amountSat) as amountSat
+  const results = await db.all<{ amountSat: number; amountMsat: string | null }[]>(
+    `SELECT htlcSettlement.amountSat, htlcSettlement.amountMsat
     FROM htlcSettlement
     JOIN channelRequest
       ON  channelRequest.channelId = htlcSettlement.channelId
@@ -151,13 +141,27 @@ export async function getChannelRequestUnclaimedAmount(db: Database, pubkey: str
       $claimed: 0,
     },
   );
-  return result?.amountSat ?? 0;
+  const totalMsat = results.reduce((total, settlement) => {
+    const amountMsat =
+      settlement.amountMsat ?? Long.fromValue(settlement.amountSat).mul(MSAT).toString();
+    return total.add(Long.fromString(amountMsat, true));
+  }, Long.UZERO);
+  return totalMsat.div(MSAT).toNumber();
 }
 
 export async function createHtlcSettlement(
   db: Database,
-  { channelId, htlcId, incomingChannelId, amountSat, settled, claimed }: IHtlcSettlementDB,
+  {
+    channelId,
+    htlcId,
+    incomingChannelId,
+    amountSat,
+    amountMsat,
+    settled,
+    claimed,
+  }: IHtlcSettlementDB,
 ) {
+  const storedAmountMsat = amountMsat ?? Long.fromValue(amountSat).mul(MSAT).toString();
   await db.run(
     `INSERT INTO htlcSettlement
       (
@@ -165,6 +169,7 @@ export async function createHtlcSettlement(
         incomingChannelId,
         htlcId,
         amountSat,
+        amountMsat,
         settled,
         claimed
       )
@@ -174,6 +179,7 @@ export async function createHtlcSettlement(
         $incomingChannelId,
         $htlcId,
         $amountSat,
+        $amountMsat,
         $settled,
         $claimed
       )
@@ -183,6 +189,7 @@ export async function createHtlcSettlement(
       $incomingChannelId: incomingChannelId,
       $htlcId: htlcId,
       $amountSat: amountSat,
+      $amountMsat: storedAmountMsat,
       $settled: settled,
       $claimed: claimed,
     },
@@ -229,36 +236,6 @@ export async function updateHtlcSettlement(
       $channelId: channelId,
       $incomingChannelId: incomingChannelId,
       $htlcId: htlcId,
-    },
-  );
-}
-
-export async function updateHtlcSettlementSetAllAsClaimed(db: Database, pubkey: string) {
-  await db.run(
-    `UPDATE htlcSettlement
-    SET claimed = $claimed
-    WHERE
-      settled = 1 AND
-      EXISTS (
-        SELECT channelRequest.pubkey
-        FROM channelRequest
-        WHERE channelRequest.pubkey = $pubkey AND channelRequest.channelId = htlcSettlement.channelId
-      )`,
-    {
-      $pubkey: pubkey,
-      $claimed: 1,
-    },
-  );
-}
-
-export async function updateHtlcSettlementByChannelIdSetAsClaimed(db: Database, channelId: string) {
-  await db.run(
-    `UPDATE htlcSettlement
-    SET claimed = $claimed
-    WHERE channelId = $channelId and settled = 1`,
-    {
-      $channelId: channelId,
-      $claimed: 1,
     },
   );
 }

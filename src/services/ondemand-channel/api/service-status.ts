@@ -4,7 +4,12 @@ import { Client } from "@grpc/grpc-js";
 import Long from "long";
 
 import { estimateFee } from "../../../utils/lnd-api";
-import { checkFeeTooHigh, getMaximumPaymentSat, getMinimumPaymentSat } from "./utils";
+import {
+  checkFeeTooHigh,
+  getFeeChargeSat,
+  getMaximumPaymentSat,
+  getMinimumPaymentSat,
+} from "./utils";
 
 export interface IServiceStatusResponse {
   status: boolean;
@@ -22,8 +27,6 @@ export default function ServiceStatus(
   return async function () {
     // The maximum payment we'll accept
     const maximumPaymentSat = getMaximumPaymentSat();
-    const feeSubsidyFactor = config.get<number>("fee.subsidyFactor") || 1;
-
     const estimateFeeResponse = await estimateFee(lightning, Long.fromValue(maximumPaymentSat), 1);
     // Close down the service if fees are too high
     const status = !checkFeeTooHigh(
@@ -35,12 +38,9 @@ export default function ServiceStatus(
     const minimumPaymentSat = getMinimumPaymentSat(estimateFeeResponse.feeSat);
 
     // Approx fee
-    const estimatedFee = estimateFeeResponse.feeSat;
-    const estimatedFeeSubsidized = estimatedFee.div(1 / feeSubsidyFactor);
-
     const response: IServiceStatusResponse = {
       status,
-      approxFeeSat: estimatedFeeSubsidized.toNumber(),
+      approxFeeSat: getFeeChargeSat(estimateFeeResponse.feeSat),
       minimumPaymentSat,
       maximumPaymentSat,
       peer: `${servicePubKey}@${lndNode}`,

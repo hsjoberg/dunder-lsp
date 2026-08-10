@@ -6,9 +6,7 @@ import {
   createHtlcSettlement,
   getChannelRequest,
   getHtlcSettlement,
-  updateChannelRequest,
   updateHtlcSettlement,
-  updateHtlcSettlementByChannelIdSetAsClaimed,
 } from "../../../db/ondemand-channel";
 import {
   bytesToHexString,
@@ -21,7 +19,6 @@ import { checkFeeTooHigh, getMaximumPaymentSat, getMinimumPaymentSat } from "./u
 import {
   checkPeerConnected,
   estimateFee,
-  openChannelSync,
   subscribeHtlcEvents,
   verifyMessage,
 } from "../../../utils/lnd-api";
@@ -40,6 +37,7 @@ import Long from "long";
 import { MSAT } from "../../../utils/constants";
 import { RouteHandlerMethod } from "fastify";
 import config from "config";
+import { openChannelForSettledHtlcs } from "../channel-open";
 
 export interface IRegisterRequest {
   pubkey: string;
@@ -378,6 +376,7 @@ export const createOnDemandChannelHtlcHandler = (
         incomingChannelId: hodl.incomingChannelId.toNumber(),
         htlcId: hodl.htlcId.toNumber(),
         amountSat: hodl.amountMsat.div(MSAT).toNumber(),
+        amountMsat: hodl.amountMsat.toString(),
         settled: 0,
         claimed: 0,
       });
@@ -418,8 +417,6 @@ async function openChannelWhenHtlcsSettled(
 ) {
   const channelId = channelRequest.channelId;
   const start = new Date();
-  const maximumPaymentSat = getMaximumPaymentSat();
-  const feeSubsidyFactor = config.get<number>("fee.subsidyFactor") || 1;
   const allowZeroConfChannels = config.get<boolean>("allowZeroConfChannels") || false;
   const allowTaprootChannels = config.get<boolean>("allowTaprootChannels") || false;
 
@@ -461,52 +458,25 @@ async function openChannelWhenHtlcsSettled(
         break;
       }
 
-      // TODO check if peer online
-      if (!(await checkPeerConnected(lightning, channelRequest.pubkey))) {
-        console.error("Peer not online");
-      }
-
       console.log("Opening channel", { pubkey: channelRequest.pubkey });
       try {
-        // Calculate how much we will subtract for fees
-        let feeResult: lnrpc.EstimateFeeResponse | undefined;
-        try {
-          // Check whether we can still do this transaction
-          feeResult = await estimateFee(lightning, Long.fromValue(maximumPaymentSat), 1);
-          if (partTotalMsat.subtract(feeResult.feeSat.mul(MSAT)).lessThanOrEqual(0)) {
-            throw new Error("Too high fee");
-          }
-        } catch (e) {
-          console.error("estimateFee failed");
-          throw e;
-        }
-        const estimatedFeeMsat = feeResult.feeSat.mul(MSAT);
-        const estimatedFeeMsatSubsidized = estimatedFeeMsat.div(1 / feeSubsidyFactor); // FIXME bug if subsidy is 0
-
-        // Attempt to open a channel with the requesting party
-        const localFunding = Long.fromValue(maximumPaymentSat).add(10_000);
-        const pushAmount = partTotalMsat.subtract(estimatedFeeMsatSubsidized).div(MSAT);
-
-        const result = await attemptChannelOpen({
+        const result = await openChannelForSettledHtlcs({
+          db,
           lightning,
           pubkey: channelRequest.pubkey,
-          localFunding,
-          pushAmount,
-          privateChannel: true,
+          source: "AUTOMATIC",
+          requestedChannelId: channelId,
+          requiredAmountSat: channelRequest.expectedAmountSat,
           spendUnconfirmed: false,
           zeroConf: allowZeroConfChannels,
           taprootChannel: allowTaprootChannels,
         });
-
-        const txId = bytesToHexString(result.fundingTxidBytes!.reverse());
-
-        // Once we've opened a channel, we mark the channel request as completed
-        await updateChannelRequest(db, {
-          ...channelRequest,
-          status: "DONE",
-          channelPoint: `${txId}:${result.outputIndex}`,
-        });
-        await updateHtlcSettlementByChannelIdSetAsClaimed(db, channelId);
+        if (result.status !== "OPENED") {
+          console.warn("Automatic channel open did not complete", {
+            channelId,
+            status: result.status,
+          });
+        }
       } catch (error) {
         console.error("Could not open channel", error);
       }
@@ -570,69 +540,4 @@ htlcId=${htlcEvent.incomingHtlcId.toString()}`);
       settled: 1,
     });
   });
-};
-
-type AttemptChannelOpen = {
-  lightning: Client;
-  pubkey: string;
-  localFunding: Long;
-  pushAmount: Long;
-  privateChannel: boolean;
-  spendUnconfirmed: boolean;
-  zeroConf: boolean;
-  taprootChannel: boolean;
-};
-const attemptChannelOpen = async ({
-  lightning,
-  pubkey,
-  localFunding,
-  pushAmount,
-  privateChannel,
-  spendUnconfirmed,
-  zeroConf,
-  taprootChannel,
-}: AttemptChannelOpen) => {
-  let zeroConfChannelAttempt = 2;
-  let regularChannelAttempt = 2;
-
-  // Only attempt zero conf if the config allows for it.
-  if (!!zeroConf) {
-    while (zeroConfChannelAttempt--) {
-      try {
-        return await openChannelSync(
-          lightning,
-          pubkey,
-          localFunding,
-          pushAmount,
-          privateChannel,
-          spendUnconfirmed,
-          zeroConf,
-          taprootChannel,
-        );
-      } catch (e: any) {
-        console.error("Failed to Open Zero-Conf Channel", e.message);
-        await timeout(4000);
-      }
-    }
-  }
-
-  // If zero conf fails, attempt a regular channel
-  while (regularChannelAttempt--) {
-    try {
-      return await openChannelSync(
-        lightning,
-        pubkey,
-        localFunding,
-        pushAmount,
-        privateChannel,
-        spendUnconfirmed,
-        false,
-        false,
-      );
-    } catch (e: any) {
-      console.error("Failed to Open Regular Channel", e.message);
-      await timeout(4000);
-    }
-  }
-  throw new Error("Could not open channel");
 };

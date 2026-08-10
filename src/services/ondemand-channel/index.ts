@@ -10,6 +10,8 @@ import Claim from "./api/claim";
 import getDb from "../../db/db";
 import { startHtlcInterceptor } from "../htlc-interceptor";
 import { createOnDemandChannelHtlcHandler } from "./api/register";
+import config from "config";
+import { startChannelOpenRecovery } from "./channel-open";
 
 export interface IErrorResponse {
   status: "ERROR";
@@ -34,6 +36,16 @@ const OnDemandChannel = async function (app, { lightning, router }) {
   app.post("/claim", Claim(db, lightning));
 
   AutoHeal(db, lightning, router);
+
+  // Tests exercise recovery explicitly so their lnd mocks and timers remain
+  // deterministic. A real service run reconciles immediately on startup and
+  // continues draining durable automatic-opening work in the background.
+  if (config.get<string>("env") !== "test") {
+    const stopChannelOpenRecovery = startChannelOpenRecovery(db, lightning);
+    app.addHook("onClose", async () => {
+      stopChannelOpenRecovery();
+    });
+  }
 } as FastifyPluginAsync<{ lightning: Client; router: Client }>;
 
 export default OnDemandChannel;
