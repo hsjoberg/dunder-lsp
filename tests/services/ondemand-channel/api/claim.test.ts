@@ -1,4 +1,5 @@
 import waitForExpect from "wait-for-expect";
+import { status as grpcStatus } from "@grpc/grpc-js";
 
 import Claim from "../../../../src/services/ondemand-channel/api/claim";
 import getDb from "../../../../src/db/db";
@@ -8,10 +9,17 @@ import {
   getChannelRequestUnclaimedAmount,
   getHtlcSettlement,
 } from "../../../../src/db/ondemand-channel";
-import { getActiveChannelOpenAttempt } from "../../../../src/db/channel-open-attempt";
 import {
+  getActiveChannelOpenAttempt,
+  markChannelOpenAttemptDispatched,
+  reserveChannelOpenAttempt,
+} from "../../../../src/db/channel-open-attempt";
+import {
+  CHANNEL_OPEN_ATTEMPT_STALE_MS,
+  cancelStaleChannelOpenAttempt,
   getChannelOpenAttemptMemo,
   openChannelForSettledHtlcs,
+  reconcileChannelOpenAttempt,
   recoverChannelOpenState,
 } from "../../../../src/services/ondemand-channel/channel-open";
 import { lnrpc } from "../../../../src/proto";
@@ -24,6 +32,10 @@ import {
 } from "../../../../mocks/utils/lnd-api";
 
 const PUBKEY = "abcdef12345";
+
+function grpcError(code: number, message: string, extra: Record<string, unknown> = {}) {
+  return Object.assign(new Error(message), { code, details: message }, extra);
+}
 
 function claimRequest(pubkey = PUBKEY) {
   return {
@@ -261,6 +273,115 @@ describe("/ondemand-channel/claim", () => {
     expect(openCall[8]).toBe(getChannelOpenAttemptMemo(attempt!.attemptId));
   });
 
+  test("never downgrades a rejected Taproot channel to a regular channel", async () => {
+    const db = await getDb(true);
+    await seedUnclaimed(db);
+    const handler = Claim(db, {} as any);
+    (openChannelSync as jest.Mock).mockRejectedValueOnce(
+      grpcError(grpcStatus.UNKNOWN, "requested channel type not supported"),
+    );
+
+    await (handler as any)(claimRequest(), reply());
+
+    expect(openChannelSync).toBeCalledTimes(1);
+    const taprootCall = (openChannelSync as jest.Mock).mock.calls[0];
+    expect(taprootCall[6]).toBe(true);
+    expect(taprootCall[7]).toBe(true);
+
+    const attempt = await db.get<{
+      status: string;
+      dispatchCount: number;
+      zeroConf: number;
+      taprootChannel: number;
+    }>("SELECT status, dispatchCount, zeroConf, taprootChannel FROM channelOpenAttempt");
+    expect(attempt).toEqual({
+      status: "UNKNOWN",
+      dispatchCount: 1,
+      zeroConf: 1,
+      taprootChannel: 1,
+    });
+    expect((await getHtlcSettlement(db, "claim-channel-1", 1, 1))?.channelOpenAttemptId).toBe(
+      (await getActiveChannelOpenAttempt(db, PUBKEY))?.attemptId,
+    );
+  });
+
+  test("keeps a rejected channel reservation instead of dispatching another payout", async () => {
+    const db = await getDb(true);
+    await seedUnclaimed(db);
+    const errorMessage =
+      "not enough witness outputs to create funding transaction, need 1010000 only have 500000 available";
+    (openChannelSync as jest.Mock).mockRejectedValueOnce(
+      grpcError(grpcStatus.UNKNOWN, errorMessage),
+    );
+
+    const result = await openChannelForSettledHtlcs({
+      db,
+      lightning: {} as any,
+      pubkey: PUBKEY,
+      source: "CLAIM",
+      spendUnconfirmed: false,
+      zeroConf: true,
+      taprootChannel: true,
+    });
+
+    expect(result.status).toBe("UNKNOWN");
+    expect(openChannelSync).toBeCalledTimes(1);
+    expect((await getActiveChannelOpenAttempt(db, PUBKEY))?.status).toBe("UNKNOWN");
+    const settlement = await getHtlcSettlement(db, "claim-channel-1", 1, 1);
+    expect(settlement?.channelOpenAttemptId).not.toBeNull();
+    await expect(
+      db.get("SELECT status, rpcDispatched, dispatchCount FROM channelOpenAttempt"),
+    ).resolves.toEqual({ status: "UNKNOWN", rpcDispatched: 1, dispatchCount: 1 });
+  });
+
+  test("keeps a proxy-generated UNKNOWN with details reserved", async () => {
+    const db = await getDb(true);
+    await seedUnclaimed(db);
+    (openChannelSync as jest.Mock).mockRejectedValueOnce(
+      grpcError(grpcStatus.UNKNOWN, "upstream timed out after forwarding request"),
+    );
+
+    const result = await openChannelForSettledHtlcs({
+      db,
+      lightning: {} as any,
+      pubkey: PUBKEY,
+      source: "CLAIM",
+      spendUnconfirmed: true,
+      zeroConf: true,
+      taprootChannel: true,
+    });
+
+    expect(result.status).toBe("UNKNOWN");
+    expect(openChannelSync).toBeCalledTimes(1);
+    const attempt = await getActiveChannelOpenAttempt(db, PUBKEY);
+    expect(attempt?.status).toBe("UNKNOWN");
+    expect((await getHtlcSettlement(db, "claim-channel-1", 1, 1))?.channelOpenAttemptId).toBe(
+      attempt?.attemptId,
+    );
+  });
+
+  test("does not retry an HTTP/2 reset even when its status code looks definitive", async () => {
+    const db = await getDb(true);
+    await seedUnclaimed(db);
+    (openChannelSync as jest.Mock).mockRejectedValueOnce(
+      grpcError(grpcStatus.RESOURCE_EXHAUSTED, "transport reset", { rstCode: 11 }),
+    );
+
+    const result = await openChannelForSettledHtlcs({
+      db,
+      lightning: {} as any,
+      pubkey: PUBKEY,
+      source: "CLAIM",
+      spendUnconfirmed: true,
+      zeroConf: true,
+      taprootChannel: true,
+    });
+
+    expect(result.status).toBe("UNKNOWN");
+    expect(openChannelSync).toBeCalledTimes(1);
+    expect((await getActiveChannelOpenAttempt(db, PUBKEY))?.status).toBe("UNKNOWN");
+  });
+
   test("claims only the settlements reserved before the channel open", async () => {
     const db = await getDb(true);
     await seedUnclaimed(db);
@@ -297,7 +418,9 @@ describe("/ondemand-channel/claim", () => {
     const db = await getDb(true);
     await seedUnclaimed(db);
     const handler = Claim(db, {} as any);
-    (openChannelSync as jest.Mock).mockRejectedValueOnce(new Error("transport lost"));
+    (openChannelSync as jest.Mock).mockRejectedValueOnce(
+      grpcError(grpcStatus.UNAVAILABLE, "transport lost"),
+    );
 
     const firstReply = reply();
     await (handler as any)(claimRequest(), firstReply);
@@ -317,11 +440,233 @@ describe("/ondemand-channel/claim", () => {
     expect(secondReply.payload).toEqual({ status: "OK", amountSat: 5000 });
   });
 
+  test("releases a stale reservation that was never dispatched", async () => {
+    const db = await getDb(true);
+    await seedUnclaimed(db);
+    const reservation = await reserveChannelOpenAttempt(db, {
+      attemptId: "stale-undispatched-attempt",
+      pubkey: PUBKEY,
+      source: "CLAIM",
+      maximumAmountSat: 1_000_000,
+      feeSat: 10,
+      existingChannelPoints: [],
+      spendUnconfirmed: false,
+      zeroConf: true,
+      taprootChannel: true,
+    });
+    expect(reservation.status).toBe("RESERVED");
+    if (reservation.status !== "RESERVED") {
+      throw new Error("Expected reservation");
+    }
+    const updatedAt = 1_000;
+    await db.run(
+      "UPDATE channelOpenAttempt SET updatedAt = ? WHERE attemptId = ?",
+      updatedAt,
+      reservation.attempt.attemptId,
+    );
+    const staleAttempt = (await getActiveChannelOpenAttempt(db, PUBKEY))!;
+
+    const result = await reconcileChannelOpenAttempt(
+      db,
+      {} as any,
+      staleAttempt,
+      updatedAt + CHANNEL_OPEN_ATTEMPT_STALE_MS,
+    );
+
+    expect(result.status).toBe("CANCELLED");
+    expect(openChannelSync).not.toBeCalled();
+    await expect(getActiveChannelOpenAttempt(db, PUBKEY)).resolves.toBeUndefined();
+    expect((await getHtlcSettlement(db, "claim-channel-1", 1, 1))?.channelOpenAttemptId).toBeNull();
+  });
+
+  test("claim continues after releasing a stale undispatched migrated reservation", async () => {
+    const db = await getDb(true);
+    await seedUnclaimed(db);
+    await db.run(
+      "UPDATE channelRequest SET automaticOpenQueued = 0 WHERE channelId = ?",
+      "claim-channel-1",
+    );
+    const reservation = await reserveChannelOpenAttempt(db, {
+      attemptId: "stale-migrated-claim-attempt",
+      pubkey: PUBKEY,
+      source: "CLAIM",
+      maximumAmountSat: 1_000_000,
+      feeSat: 10,
+      existingChannelPoints: [],
+      spendUnconfirmed: true,
+      zeroConf: true,
+      taprootChannel: true,
+    });
+    if (reservation.status !== "RESERVED") {
+      throw new Error("Expected reservation");
+    }
+    await db.run(
+      "UPDATE channelOpenAttempt SET updatedAt = ? WHERE attemptId = ?",
+      Date.now() - CHANNEL_OPEN_ATTEMPT_STALE_MS - 1,
+      reservation.attempt.attemptId,
+    );
+
+    const handler = Claim(db, {} as any);
+    const claimReply = reply();
+    await (handler as any)(claimRequest(), claimReply);
+
+    expect(claimReply.payload).toEqual({ status: "OK", amountSat: 5000 });
+    expect(openChannelSync).toBeCalledTimes(1);
+    expect((openChannelSync as jest.Mock).mock.calls[0][7]).toBe(true);
+    await expect(
+      db.get("SELECT status FROM channelOpenAttempt WHERE attemptId = ?", "stale-migrated-claim-attempt"),
+    ).resolves.toEqual({ status: "CANCELLED" });
+    await expect(getChannelRequestUnclaimedAmount(db, PUBKEY)).resolves.toBe(0);
+  });
+
+  test("startup recovery retries work from a stale undispatched reservation", async () => {
+    const db = await getDb(true);
+    await seedUnclaimed(db, { channelId: "stale-automatic-channel" });
+    const reservation = await reserveChannelOpenAttempt(db, {
+      attemptId: "stale-automatic-attempt",
+      pubkey: PUBKEY,
+      source: "AUTOMATIC",
+      requestedChannelId: "stale-automatic-channel",
+      requiredAmountSat: 5000,
+      maximumAmountSat: 1_000_000,
+      feeSat: 10,
+      existingChannelPoints: [],
+      spendUnconfirmed: false,
+      zeroConf: true,
+      taprootChannel: true,
+    });
+    if (reservation.status !== "RESERVED") {
+      throw new Error("Expected reservation");
+    }
+    await db.run(
+      "UPDATE channelOpenAttempt SET updatedAt = ? WHERE attemptId = ?",
+      Date.now() - CHANNEL_OPEN_ATTEMPT_STALE_MS - 1,
+      reservation.attempt.attemptId,
+    );
+
+    const results = await recoverChannelOpenState(db, {} as any);
+
+    expect(results.map((result) => result.status)).toEqual(["CANCELLED", "OPENED"]);
+    expect(openChannelSync).toBeCalledTimes(1);
+    await expect(getChannelRequestUnclaimedAmount(db, PUBKEY)).resolves.toBe(0);
+  });
+
+  test("never releases a stale dispatched attempt from an empty lnd snapshot", async () => {
+    const db = await getDb(true);
+    await seedUnclaimed(db);
+    const reservation = await reserveChannelOpenAttempt(db, {
+      attemptId: "stale-dispatched-attempt",
+      pubkey: PUBKEY,
+      source: "CLAIM",
+      maximumAmountSat: 1_000_000,
+      feeSat: 10,
+      existingChannelPoints: [],
+      spendUnconfirmed: false,
+      zeroConf: true,
+      taprootChannel: true,
+    });
+    if (reservation.status !== "RESERVED") {
+      throw new Error("Expected reservation");
+    }
+    await markChannelOpenAttemptDispatched(db, reservation.attempt.attemptId, {
+      zeroConf: true,
+      taprootChannel: true,
+    });
+    const updatedAt = 2_000;
+    await db.run(
+      "UPDATE channelOpenAttempt SET updatedAt = ? WHERE attemptId = ?",
+      updatedAt,
+      reservation.attempt.attemptId,
+    );
+
+    const result = await cancelStaleChannelOpenAttempt({
+      db,
+      lightning: {} as any,
+      attemptId: reservation.attempt.attemptId,
+      expectedUpdatedAt: updatedAt,
+      reason: "Operator verified no channel was opened",
+      now: updatedAt + CHANNEL_OPEN_ATTEMPT_STALE_MS,
+    });
+
+    expect(result).toMatchObject({
+      status: "UNSAFE_TO_CANCEL",
+      matchingMemoCount: 0,
+      newChannelPoints: [],
+      pendingPeerChannelCount: 0,
+      unidentifiedPeerChannelCount: 0,
+    });
+    expect((await getActiveChannelOpenAttempt(db, PUBKEY))?.status).toBe("OPENING");
+    expect((await getHtlcSettlement(db, "claim-channel-1", 1, 1))?.channelOpenAttemptId).toBe(
+      reservation.attempt.attemptId,
+    );
+  });
+
+  test("operator cancellation fails closed when lnd shows a new pending channel", async () => {
+    const db = await getDb(true);
+    await seedUnclaimed(db);
+    const reservation = await reserveChannelOpenAttempt(db, {
+      attemptId: "unsafe-dispatched-attempt",
+      pubkey: PUBKEY,
+      source: "CLAIM",
+      maximumAmountSat: 1_000_000,
+      feeSat: 10,
+      existingChannelPoints: [],
+      spendUnconfirmed: false,
+      zeroConf: true,
+      taprootChannel: true,
+    });
+    if (reservation.status !== "RESERVED") {
+      throw new Error("Expected reservation");
+    }
+    await markChannelOpenAttemptDispatched(db, reservation.attempt.attemptId, {
+      zeroConf: true,
+      taprootChannel: true,
+    });
+    const updatedAt = 3_000;
+    await db.run(
+      "UPDATE channelOpenAttempt SET updatedAt = ? WHERE attemptId = ?",
+      updatedAt,
+      reservation.attempt.attemptId,
+    );
+    __setPendingChannelsResponse({
+      pendingOpenChannels: [
+        {
+          channel: {
+            remoteNodePub: PUBKEY,
+            channelPoint: "new-pending-channel:0",
+            memo: "",
+          },
+        },
+      ],
+    });
+
+    const result = await cancelStaleChannelOpenAttempt({
+      db,
+      lightning: {} as any,
+      attemptId: reservation.attempt.attemptId,
+      expectedUpdatedAt: updatedAt,
+      reason: "Operator requested cancellation check",
+      now: updatedAt + CHANNEL_OPEN_ATTEMPT_STALE_MS,
+    });
+
+    expect(result).toMatchObject({
+      status: "UNSAFE_TO_CANCEL",
+      newChannelPoints: ["new-pending-channel:0"],
+      pendingPeerChannelCount: 1,
+    });
+    expect((await getActiveChannelOpenAttempt(db, PUBKEY))?.status).toBe("OPENING");
+    expect((await getHtlcSettlement(db, "claim-channel-1", 1, 1))?.channelOpenAttemptId).toBe(
+      reservation.attempt.attemptId,
+    );
+  });
+
   test("reconciles an ambiguous open by its exact lnd memo", async () => {
     const db = await getDb(true);
     await seedUnclaimed(db);
     const handler = Claim(db, {} as any);
-    (openChannelSync as jest.Mock).mockRejectedValueOnce(new Error("transport lost"));
+    (openChannelSync as jest.Mock).mockRejectedValueOnce(
+      grpcError(grpcStatus.UNAVAILABLE, "transport lost"),
+    );
 
     await (handler as any)(claimRequest(), reply());
     const attempt = await getActiveChannelOpenAttempt(db, PUBKEY);

@@ -17,7 +17,12 @@ describe("/ondemand-channel/register", () => {
   test("registers and opens a channel when the HTLCs are settled (MPP)", async () => {
     const app = build();
 
-    const amountSat = 20000;
+    // The test fee is 10 sat and the advertised minimum is 50 sat. A shard may
+    // legitimately be below the fee; the complete payment is what must leave
+    // a positive push amount.
+    const amountSat = 51;
+    const firstPartSat = 46;
+    const secondPartSat = 5;
     const preimage = new Uint8Array([0]);
     const paymentHash = sha256Buffer(preimage);
     const pubkey = "abcdef12345";
@@ -51,7 +56,7 @@ describe("/ondemand-channel/register", () => {
     htlcInterceptorStream.emit(
       "data",
       createForwardHtlcInterceptRequest(
-        amountSat / 2,
+        firstPartSat,
         registerResponse.fakeChannelId,
         paymentHash,
         incomingChanId,
@@ -62,7 +67,7 @@ describe("/ondemand-channel/register", () => {
     htlcInterceptorStream.emit(
       "data",
       createForwardHtlcInterceptRequest(
-        amountSat / 2,
+        secondPartSat,
         registerResponse.fakeChannelId,
         paymentHash,
         incomingChanId2,

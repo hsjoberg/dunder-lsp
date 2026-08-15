@@ -15,7 +15,12 @@ import {
   sha256,
   timeout,
 } from "../../../utils/common";
-import { checkFeeTooHigh, getMaximumPaymentSat, getMinimumPaymentSat } from "./utils";
+import {
+  checkFeeTooHigh,
+  getFeeChargeSat,
+  getMaximumPaymentSat,
+  getMinimumPaymentSat,
+} from "./utils";
 import {
   checkPeerConnected,
   estimateFee,
@@ -335,7 +340,8 @@ export const createOnDemandChannelHtlcHandler = (
     try {
       // Check whether we can still do this transaction
       feeResult = await estimateFee(lightning, Long.fromValue(maximumPaymentSat), 1);
-      if (request.outgoingAmountMsat.subtract(feeResult.feeSat.mul(MSAT)).lessThanOrEqual(0)) {
+      const feeChargeMsat = Long.fromValue(getFeeChargeSat(feeResult.feeSat)).mul(MSAT);
+      if (total.subtract(feeChargeMsat).lessThanOrEqual(0)) {
         console.log("Too high fee");
         for (const hodl of interceptedHtlcHodl[channelId]) {
           doActionHtlc(

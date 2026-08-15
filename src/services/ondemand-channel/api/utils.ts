@@ -13,7 +13,15 @@ export function getMinimumPaymentSat(feeEstimateSat: Long) {
     throw new Error("minimumPaymentMultiplier must be greater than zero");
   }
 
-  return Math.ceil(getFeeChargeSat(feeEstimateSat) * minimumPaymentMultiplier);
+  const feeChargeSat = getFeeChargeSat(feeEstimateSat);
+
+  // A payment equal to the charged fee would reserve successfully only to
+  // produce a zero-satoshi push. Always advertise at least one satoshi more
+  // than the fee, even when the configured multiplier is one or lower.
+  return Math.max(
+    Math.ceil(feeChargeSat * minimumPaymentMultiplier),
+    feeChargeSat + 1,
+  );
 }
 
 export function getMaximumPaymentSat() {

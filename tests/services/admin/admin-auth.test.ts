@@ -25,6 +25,25 @@ describe("administrator authorization", () => {
     await app.close();
   });
 
+  test("rejects unauthenticated channel-open attempt cancellation", async () => {
+    const app = build();
+    await app.ready();
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/admin/api/channel-open-attempts/not-an-attempt/cancel",
+      payload: {
+        confirmation: "not-an-attempt",
+        expectedUpdatedAt: 1,
+        confirmNoClosedChannel: true,
+        reason: "Testing authorization rejection",
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    await app.close();
+  });
+
   test("administrator deletion uses exact pubkeys rather than SQL LIKE patterns", async () => {
     const db = await getDb(true);
     await createAdmin(db, ADMIN_PUBKEY, "Primary admin");

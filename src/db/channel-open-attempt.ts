@@ -23,6 +23,8 @@ export interface IChannelOpenAttemptDB {
   spendUnconfirmed: number;
   zeroConf: number;
   taprootChannel: number;
+  rpcDispatched: number;
+  dispatchCount: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -63,6 +65,16 @@ export function getActiveChannelOpenAttempts(db: Database) {
      FROM channelOpenAttempt
      WHERE status IN ('OPENING', 'UNKNOWN')
      ORDER BY createdAt, attemptId`,
+  );
+}
+
+export function getChannelOpenAttempts(db: Database, limit = 100) {
+  return db.all<IChannelOpenAttemptDB[]>(
+    `SELECT *
+     FROM channelOpenAttempt
+     ORDER BY createdAt DESC, attemptId DESC
+     LIMIT $limit`,
+    { $limit: limit },
   );
 }
 
@@ -219,6 +231,8 @@ export async function reserveChannelOpenAttempt(
          spendUnconfirmed,
          zeroConf,
          taprootChannel,
+         rpcDispatched,
+         dispatchCount,
          createdAt,
          updatedAt
        )
@@ -238,6 +252,8 @@ export async function reserveChannelOpenAttempt(
          $spendUnconfirmed,
          $zeroConf,
          $taprootChannel,
+         0,
+         0,
          $createdAt,
          $updatedAt
        )`,
@@ -288,6 +304,120 @@ export async function reserveChannelOpenAttempt(
   });
 }
 
+export async function markChannelOpenAttemptDispatched(
+  db: Database,
+  attemptId: string,
+  mode: { zeroConf: boolean; taprootChannel: boolean },
+) {
+  return withImmediateTransaction(db, async () => {
+    const updatedAt = Date.now();
+    const result = await db.run(
+      `UPDATE channelOpenAttempt
+       SET rpcDispatched = 1,
+           dispatchCount = dispatchCount + 1,
+           zeroConf = $zeroConf,
+           taprootChannel = $taprootChannel,
+           updatedAt = $updatedAt
+       WHERE attemptId = $attemptId
+         AND status = 'OPENING'
+         AND rpcDispatched = 0`,
+      {
+        $attemptId: attemptId,
+        $zeroConf: mode.zeroConf ? 1 : 0,
+        $taprootChannel: mode.taprootChannel ? 1 : 0,
+        $updatedAt: updatedAt,
+      },
+    );
+    if (result.changes !== 1) {
+      throw new Error(`Channel-open attempt ${attemptId} is not ready for dispatch`);
+    }
+
+    const attempt = await getChannelOpenAttempt(db, attemptId);
+    if (!attempt) {
+      throw new Error(`Channel-open attempt ${attemptId} disappeared before dispatch`);
+    }
+    return attempt;
+  });
+}
+
+export async function touchChannelOpenAttempt(db: Database, attemptId: string) {
+  await db.run(
+    `UPDATE channelOpenAttempt
+     SET updatedAt = $updatedAt
+     WHERE attemptId = $attemptId
+       AND status = 'OPENING'
+       AND rpcDispatched = 1`,
+    {
+      $attemptId: attemptId,
+      $updatedAt: Date.now(),
+    },
+  );
+}
+
+export async function cancelChannelOpenAttempt(
+  db: Database,
+  attemptId: string,
+  options: {
+    reason: string;
+    allowDispatched: boolean;
+    expectedUpdatedAt?: number;
+  },
+) {
+  return withImmediateTransaction(db, async () => {
+    const attempt = await getChannelOpenAttempt(db, attemptId);
+    if (!attempt) {
+      throw new Error(`Unknown channel-open attempt ${attemptId}`);
+    }
+    if (attempt.status === "OPENED" || attempt.status === "CANCELLED") {
+      return attempt;
+    }
+    if (
+      options.expectedUpdatedAt !== undefined &&
+      attempt.updatedAt !== options.expectedUpdatedAt
+    ) {
+      throw new Error(`Channel-open attempt ${attemptId} changed during cancellation`);
+    }
+    if (attempt.rpcDispatched !== 0 && !options.allowDispatched) {
+      throw new Error(`Channel-open attempt ${attemptId} may already have reached lnd`);
+    }
+
+    const result = await db.run(
+      `UPDATE channelOpenAttempt
+       SET status = 'CANCELLED',
+           error = $error,
+           updatedAt = $updatedAt
+       WHERE attemptId = $attemptId
+         AND status IN ('OPENING', 'UNKNOWN')
+         AND rpcDispatched = $rpcDispatched
+         AND updatedAt = $expectedUpdatedAt`,
+      {
+        $attemptId: attemptId,
+        $error: options.reason.slice(0, 2000),
+        $updatedAt: Date.now(),
+        $rpcDispatched: attempt.rpcDispatched,
+        $expectedUpdatedAt: attempt.updatedAt,
+      },
+    );
+    if (result.changes !== 1) {
+      throw new Error(`Channel-open attempt ${attemptId} changed during cancellation`);
+    }
+
+    await db.run(
+      `UPDATE htlcSettlement
+       SET channelOpenAttemptId = NULL
+       WHERE channelOpenAttemptId = $attemptId
+         AND claimed = 0`,
+      { $attemptId: attemptId },
+    );
+
+    const cancelled = await getChannelOpenAttempt(db, attemptId);
+    if (!cancelled) {
+      throw new Error(`Channel-open attempt ${attemptId} disappeared during cancellation`);
+    }
+    return cancelled;
+  });
+}
+
 export async function markChannelOpenAttemptUnknown(
   db: Database,
   attemptId: string,
@@ -296,7 +426,9 @@ export async function markChannelOpenAttemptUnknown(
   await db.run(
     `UPDATE channelOpenAttempt
      SET status = 'UNKNOWN', error = $error, updatedAt = $updatedAt
-     WHERE attemptId = $attemptId AND status IN ('OPENING', 'UNKNOWN')`,
+     WHERE attemptId = $attemptId
+       AND status IN ('OPENING', 'UNKNOWN')
+       AND rpcDispatched = 1`,
     {
       $attemptId: attemptId,
       $error: error.slice(0, 2000),

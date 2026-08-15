@@ -35,4 +35,32 @@ describe("on-demand channel fee configuration", () => {
 
     expect(getFeeChargeSat(Long.fromValue(100))).toBe(0);
   });
+
+  test("always leaves a positive channel push at the advertised minimum", () => {
+    (config.get as jest.Mock).mockImplementation((key: string) => {
+      if (key === "minimumPaymentMultiplier") {
+        return 1;
+      }
+      if (key === "fee.subsidyFactor") {
+        return 1;
+      }
+      throw new Error(`Unexpected config key ${key}`);
+    });
+
+    expect(getMinimumPaymentSat(Long.fromValue(100))).toBe(101);
+  });
+
+  test("advertises at least one satoshi when the fee is fully subsidized", () => {
+    (config.get as jest.Mock).mockImplementation((key: string) => {
+      if (key === "minimumPaymentMultiplier") {
+        return 1;
+      }
+      if (key === "fee.subsidyFactor") {
+        return 0;
+      }
+      throw new Error(`Unexpected config key ${key}`);
+    });
+
+    expect(getMinimumPaymentSat(Long.ZERO)).toBe(1);
+  });
 });
