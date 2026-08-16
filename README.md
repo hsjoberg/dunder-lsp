@@ -13,6 +13,18 @@ on-chain fee.
 
 More on how this works [here](https://github.com/hsjoberg/blixt-wallet/issues/242).
 
+## Known limitations
+
+### Fee increases after registration
+
+Dunder enforces the configured on-chain fee ceiling when a request is registered
+and again when it is ready to open the channel. During HTLC interception, however,
+it currently checks only that the estimated fee leaves a positive channel push
+amount. If fees rise above the configured ceiling after registration, Dunder may
+therefore settle the payment and defer the channel opening until the fee estimate
+falls below the ceiling. The settlement remains recorded for recovery, but the
+recipient will not receive the channel immediately.
+
 ## Build
 
 Dunder require lnd as the Lightning backend right now, though the plan is to

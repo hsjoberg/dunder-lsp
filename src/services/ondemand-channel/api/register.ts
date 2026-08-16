@@ -340,6 +340,10 @@ export const createOnDemandChannelHtlcHandler = (
     try {
       // Check whether we can still do this transaction
       feeResult = await estimateFee(lightning, Long.fromValue(maximumPaymentSat), 1);
+      // Known limitation: this checks only whether the fee leaves a positive
+      // push amount. If the estimate now exceeds Dunder's configured ceiling,
+      // the payment is still settled and channel opening is deferred until
+      // fees fall below that ceiling. Revisit this with the settlement design.
       const feeChargeMsat = Long.fromValue(getFeeChargeSat(feeResult.feeSat)).mul(MSAT);
       if (total.subtract(feeChargeMsat).lessThanOrEqual(0)) {
         console.log("Too high fee");

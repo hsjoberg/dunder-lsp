@@ -132,13 +132,13 @@ export async function reserveChannelOpenAttempt(
   db: Database,
   options: ReservationOptions,
 ): Promise<ChannelOpenReservationResult> {
-  return withImmediateTransaction(db, async () => {
-    const activeAttempt = await getActiveChannelOpenAttempt(db, options.pubkey);
+  return withImmediateTransaction(db, async (transactionDb) => {
+    const activeAttempt = await getActiveChannelOpenAttempt(transactionDb, options.pubkey);
     if (activeAttempt) {
       return { status: "ACTIVE_ATTEMPT", attempt: activeAttempt };
     }
 
-    const settlements = await db.all<IHtlcSettlementDB[]>(
+    const settlements = await transactionDb.all<IHtlcSettlementDB[]>(
       `SELECT htlcSettlement.*
        FROM htlcSettlement
        JOIN channelRequest
@@ -214,7 +214,7 @@ export async function reserveChannelOpenAttempt(
     }
 
     const now = Date.now();
-    await db.run(
+    await transactionDb.run(
       `INSERT INTO channelOpenAttempt
        (
          attemptId,
@@ -275,7 +275,7 @@ export async function reserveChannelOpenAttempt(
     );
 
     for (const settlement of selected) {
-      const result = await db.run(
+      const result = await transactionDb.run(
         `UPDATE htlcSettlement
          SET channelOpenAttemptId = $attemptId
          WHERE channelId = $channelId
@@ -296,7 +296,7 @@ export async function reserveChannelOpenAttempt(
       }
     }
 
-    const attempt = await getChannelOpenAttempt(db, options.attemptId);
+    const attempt = await getChannelOpenAttempt(transactionDb, options.attemptId);
     if (!attempt) {
       throw new Error("Channel-open attempt disappeared during reservation");
     }
@@ -309,9 +309,9 @@ export async function markChannelOpenAttemptDispatched(
   attemptId: string,
   mode: { zeroConf: boolean; taprootChannel: boolean },
 ) {
-  return withImmediateTransaction(db, async () => {
+  return withImmediateTransaction(db, async (transactionDb) => {
     const updatedAt = Date.now();
-    const result = await db.run(
+    const result = await transactionDb.run(
       `UPDATE channelOpenAttempt
        SET rpcDispatched = 1,
            dispatchCount = dispatchCount + 1,
@@ -332,7 +332,7 @@ export async function markChannelOpenAttemptDispatched(
       throw new Error(`Channel-open attempt ${attemptId} is not ready for dispatch`);
     }
 
-    const attempt = await getChannelOpenAttempt(db, attemptId);
+    const attempt = await getChannelOpenAttempt(transactionDb, attemptId);
     if (!attempt) {
       throw new Error(`Channel-open attempt ${attemptId} disappeared before dispatch`);
     }
@@ -363,8 +363,8 @@ export async function cancelChannelOpenAttempt(
     expectedUpdatedAt?: number;
   },
 ) {
-  return withImmediateTransaction(db, async () => {
-    const attempt = await getChannelOpenAttempt(db, attemptId);
+  return withImmediateTransaction(db, async (transactionDb) => {
+    const attempt = await getChannelOpenAttempt(transactionDb, attemptId);
     if (!attempt) {
       throw new Error(`Unknown channel-open attempt ${attemptId}`);
     }
@@ -381,7 +381,7 @@ export async function cancelChannelOpenAttempt(
       throw new Error(`Channel-open attempt ${attemptId} may already have reached lnd`);
     }
 
-    const result = await db.run(
+    const result = await transactionDb.run(
       `UPDATE channelOpenAttempt
        SET status = 'CANCELLED',
            error = $error,
@@ -402,7 +402,7 @@ export async function cancelChannelOpenAttempt(
       throw new Error(`Channel-open attempt ${attemptId} changed during cancellation`);
     }
 
-    await db.run(
+    await transactionDb.run(
       `UPDATE htlcSettlement
        SET channelOpenAttemptId = NULL
        WHERE channelOpenAttemptId = $attemptId
@@ -410,7 +410,7 @@ export async function cancelChannelOpenAttempt(
       { $attemptId: attemptId },
     );
 
-    const cancelled = await getChannelOpenAttempt(db, attemptId);
+    const cancelled = await getChannelOpenAttempt(transactionDb, attemptId);
     if (!cancelled) {
       throw new Error(`Channel-open attempt ${attemptId} disappeared during cancellation`);
     }
@@ -442,8 +442,8 @@ export async function finalizeChannelOpenAttempt(
   attemptId: string,
   channelPoint: string,
 ) {
-  return withImmediateTransaction(db, async () => {
-    const attempt = await getChannelOpenAttempt(db, attemptId);
+  return withImmediateTransaction(db, async (transactionDb) => {
+    const attempt = await getChannelOpenAttempt(transactionDb, attemptId);
     if (!attempt) {
       throw new Error(`Unknown channel-open attempt ${attemptId}`);
     }
@@ -457,12 +457,12 @@ export async function finalizeChannelOpenAttempt(
       throw new Error(`Channel-open attempt ${attemptId} was cancelled`);
     }
 
-    const settlements = await getChannelOpenAttemptSettlements(db, attemptId);
+    const settlements = await getChannelOpenAttemptSettlements(transactionDb, attemptId);
     if (settlements.length === 0) {
       throw new Error(`Channel-open attempt ${attemptId} has no reserved settlements`);
     }
 
-    const settlementUpdate = await db.run(
+    const settlementUpdate = await transactionDb.run(
       `UPDATE htlcSettlement
        SET claimed = 1
        WHERE channelOpenAttemptId = $attemptId
@@ -475,7 +475,7 @@ export async function finalizeChannelOpenAttempt(
         `Channel-open attempt ${attemptId} could not claim every reserved settlement`,
       );
     }
-    await db.run(
+    await transactionDb.run(
       `UPDATE channelRequest
        SET channelPoint = $channelPoint,
            status = 'DONE',
@@ -490,7 +490,7 @@ export async function finalizeChannelOpenAttempt(
         $channelPoint: channelPoint,
       },
     );
-    await db.run(
+    await transactionDb.run(
       `UPDATE channelOpenAttempt
        SET status = 'OPENED',
            channelPoint = $channelPoint,
@@ -504,7 +504,7 @@ export async function finalizeChannelOpenAttempt(
       },
     );
 
-    const finalized = await getChannelOpenAttempt(db, attemptId);
+    const finalized = await getChannelOpenAttempt(transactionDb, attemptId);
     if (!finalized) {
       throw new Error(`Channel-open attempt ${attemptId} disappeared during finalization`);
     }
