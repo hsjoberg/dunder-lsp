@@ -8,6 +8,7 @@ import {
   createHtlcSettlement,
   getChannelRequestUnclaimedAmount,
   getHtlcSettlement,
+  updateHtlcSettlement,
 } from "../../../../src/db/ondemand-channel";
 import {
   getActiveChannelOpenAttempt,
@@ -412,6 +413,92 @@ describe("/ondemand-channel/claim", () => {
     expect(second?.claimed).toBe(0);
     expect(second?.channelOpenAttemptId).toBeNull();
     await expect(getChannelRequestUnclaimedAmount(db, PUBKEY)).resolves.toBe(2000);
+  });
+
+  test("batches complete requests but leaves an incomplete request recoverable", async () => {
+    const db = await getDb(true);
+    await createChannelRequest(db, {
+      channelId: "incomplete-channel",
+      pubkey: PUBKEY,
+      preimage: "incomplete-preimage",
+      status: "REGISTERED",
+      start: 0,
+      expire: 600,
+      expectedAmountSat: 5000,
+      channelPoint: null,
+    });
+    await createHtlcSettlement(db, {
+      channelId: "incomplete-channel",
+      incomingChannelId: 1,
+      htlcId: 1,
+      amountSat: 3000,
+      settled: 1,
+      claimed: 0,
+    });
+    await createHtlcSettlement(db, {
+      channelId: "incomplete-channel",
+      incomingChannelId: 2,
+      htlcId: 2,
+      amountSat: 2000,
+      settled: 0,
+      claimed: 0,
+    });
+    await seedUnclaimed(db, {
+      channelId: "complete-channel",
+      amountSat: 4000,
+      incomingChannelId: 3,
+      htlcId: 3,
+    });
+    await seedUnclaimed(db, {
+      channelId: "complete-channel-2",
+      amountSat: 1500,
+      incomingChannelId: 4,
+      htlcId: 4,
+    });
+
+    let resolveFirstOpen: (value: lnrpc.ChannelPoint) => void = () => {};
+    (openChannelSync as jest.Mock).mockImplementationOnce(
+      () =>
+        new Promise<lnrpc.ChannelPoint>((resolve) => {
+          resolveFirstOpen = resolve;
+        }),
+    );
+
+    const handler = Claim(db, {} as any);
+    const claim = (handler as any)(claimRequest(), reply());
+    await waitForExpect(() => expect(openChannelSync).toBeCalledTimes(1));
+
+    const firstAttempt = await db.get<{ grossAmountSat: number }>(
+      "SELECT grossAmountSat FROM channelOpenAttempt WHERE status = 'OPENING'",
+    );
+    expect(firstAttempt).toEqual({ grossAmountSat: 5500 });
+
+    // The final shard is acknowledged while the channel for the other,
+    // already-complete request is opening.
+    await updateHtlcSettlement(db, {
+      channelId: "incomplete-channel",
+      incomingChannelId: 2,
+      htlcId: 2,
+      amountSat: 2000,
+      settled: 1,
+      claimed: 0,
+    });
+    resolveFirstOpen(successfulChannelPoint());
+    await claim;
+
+    await expect(
+      db.get(
+        "SELECT status, automaticOpenQueued FROM channelRequest WHERE channelId = ?",
+        "incomplete-channel",
+      ),
+    ).resolves.toEqual({ status: "REGISTERED", automaticOpenQueued: 1 });
+    expect((await getHtlcSettlement(db, "incomplete-channel", 1, 1))?.claimed).toBe(0);
+    expect((await getHtlcSettlement(db, "incomplete-channel", 2, 2))?.claimed).toBe(0);
+
+    await recoverChannelOpenState(db, {} as any);
+
+    expect(openChannelSync).toBeCalledTimes(2);
+    await expect(getChannelRequestUnclaimedAmount(db, PUBKEY)).resolves.toBe(0);
   });
 
   test("keeps an ambiguous open reserved and never retries it blindly", async () => {

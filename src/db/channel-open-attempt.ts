@@ -148,6 +148,27 @@ export async function reserveChannelOpenAttempt(
          AND htlcSettlement.claimed = 0
          AND htlcSettlement.channelOpenAttemptId IS NULL
          AND ($channelId IS NULL OR htlcSettlement.channelId = $channelId)
+         AND NOT EXISTS (
+           SELECT 1
+           FROM htlcSettlement AS unsettled
+           WHERE unsettled.channelId = channelRequest.channelId
+             AND unsettled.settled = 0
+         )
+         AND (
+           SELECT COALESCE(
+             SUM(
+               CAST(
+                 COALESCE(
+                   requestSettlement.amountMsat,
+                   CAST(requestSettlement.amountSat * 1000 AS TEXT)
+                 ) AS INTEGER
+               )
+             ),
+             0
+           )
+           FROM htlcSettlement AS requestSettlement
+           WHERE requestSettlement.channelId = channelRequest.channelId
+         ) = channelRequest.expectedAmountSat * 1000
        ORDER BY htlcSettlement.channelId,
                 htlcSettlement.incomingChannelId,
                 htlcSettlement.htlcId`,
@@ -172,9 +193,9 @@ export async function reserveChannelOpenAttempt(
     const selected: IHtlcSettlementDB[] = [];
     let totalMsat = Long.UZERO;
 
-    // Keep all currently settled shards for one channel request together. A
-    // claim may span several requests, but it must never reserve only part of
-    // a request merely because the configured channel limit was reached.
+    // Every selected request is complete, but a claim may still combine
+    // several requests. Keep each request's remaining unclaimed shards
+    // together when applying the configured channel limit.
     for (const channelSettlements of settlementsByChannel.values()) {
       const channelAmountMsat = channelSettlements.reduce((amount, settlement) => {
         return amount.add(
