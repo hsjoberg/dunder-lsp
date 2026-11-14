@@ -9,6 +9,7 @@ import {
   getFeeChargeSat,
   getMaximumPaymentSat,
   getMinimumPaymentSat,
+  isChannelOpeningEnabled,
 } from "./utils";
 
 export interface IServiceStatusResponse {
@@ -28,8 +29,8 @@ export default function ServiceStatus(
     // The maximum payment we'll accept
     const maximumPaymentSat = getMaximumPaymentSat();
     const estimateFeeResponse = await estimateFee(lightning, Long.fromValue(maximumPaymentSat), 1);
-    // Close down the service if fees are too high
-    const status = !checkFeeTooHigh(
+    // Close down the service if channel opening is disabled or fees are too high
+    const status = isChannelOpeningEnabled() && !checkFeeTooHigh(
       estimateFeeResponse.feerateSatPerByte,
       estimateFeeResponse.feeSat,
     );

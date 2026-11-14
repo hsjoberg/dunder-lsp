@@ -30,6 +30,7 @@ import {
   checkFeeTooHigh,
   getFeeChargeSat,
   getMaximumPaymentSat,
+  isChannelOpeningEnabled,
 } from "./api/utils";
 
 type OpenSettledHtlcsOptions = {
@@ -54,7 +55,8 @@ export type OpenSettledHtlcsResult =
   | { status: "FEE_EXCEEDS_AMOUNT"; amountSat: number }
   | { status: "FEES_TOO_HIGH" }
   | { status: "PEER_OFFLINE" }
-  | { status: "PENDING_CHANNEL" };
+  | { status: "PENDING_CHANNEL" }
+  | { status: "DISABLED" };
 
 type PeerChannelState = {
   channelPoints: string[];
@@ -302,6 +304,12 @@ export async function openChannelForSettledHtlcs(
     // released, so this invocation can continue and reserve them again.
   }
 
+  // Reconciling an attempt that already reached lnd (above) only records its
+  // outcome. Reserving and dispatching a new open is what the kill switch stops.
+  if (!isChannelOpeningEnabled()) {
+    return { status: "DISABLED" };
+  }
+
   if (!(await checkPeerConnected(options.lightning, options.pubkey))) {
     return { status: "PEER_OFFLINE" };
   }
@@ -504,6 +512,10 @@ export async function recoverChannelOpenState(db: Database, lightning: Client) {
     if (result.status === "IN_PROGRESS" || result.status === "UNKNOWN") {
       blockedPubkeys.add(attempt.pubkey);
     }
+  }
+
+  if (!isChannelOpeningEnabled()) {
+    return results;
   }
 
   const allowZeroConfChannels = config.get<boolean>("allowZeroConfChannels") || false;

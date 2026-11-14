@@ -6,12 +6,17 @@ import { getChannelRequestUnclaimedAmount } from "../../../../db/ondemand-channe
 import { lnrpc } from "../../../../proto";
 import { subscribePeerEvents } from "../../../../utils/lnd-api";
 import { openChannelForSettledHtlcs } from "../../channel-open";
+import { isChannelOpeningEnabled } from "../utils";
 
 export async function openAutoHealChannelIfNeeded(
   db: Database,
   lightning: Client,
   pubkey: string,
 ) {
+  if (!isChannelOpeningEnabled()) {
+    return;
+  }
+
   // Peer-online events are remote-triggerable. Avoid the more expensive lnd
   // peer, fee, channel and pending-channel RPCs when there is nothing to pay.
   if ((await getChannelRequestUnclaimedAmount(db, pubkey)) === 0) {

@@ -24,6 +24,24 @@ export function getMinimumPaymentSat(feeEstimateSat: Long) {
   );
 }
 
+/**
+ * `channelOpeningEnabled` is an operator kill switch. It defaults to true so
+ * existing configurations keep working. When false, Dunder accepts no new
+ * channel requests, refuses incoming payments for existing ones and never
+ * dispatches a new channel open. Reconciliation of opens that were already
+ * dispatched to lnd keeps running.
+ */
+export function isChannelOpeningEnabled() {
+  if (!config.has("channelOpeningEnabled")) {
+    return true;
+  }
+  const enabled = config.get<unknown>("channelOpeningEnabled");
+  if (typeof enabled !== "boolean") {
+    throw new Error("channelOpeningEnabled must be a boolean");
+  }
+  return enabled;
+}
+
 export function getMaximumPaymentSat() {
   return config.get<number>("maximumPaymentSat");
 }
