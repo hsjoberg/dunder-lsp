@@ -13,6 +13,21 @@ on-chain fee.
 
 More on how this works [here](https://github.com/hsjoberg/blixt-wallet/issues/242).
 
+## Disabling channel opening
+
+Set `"channelOpeningEnabled": false` in your config and restart Dunder to stop
+it from opening any new channels. The setting is optional and defaults to `true`.
+While it is disabled:
+
+- `/ondemand-channel/register` and `/ondemand-channel/claim` return HTTP 503.
+- `/ondemand-channel/service-status` reports `status: false`.
+- Incoming payments for already registered channel requests are failed instead
+  of settled, so payers are not charged.
+- Auto-heal and the background recovery loop do not open channels. Payments
+  that were already settled stay unclaimed until channel opening is enabled
+  again.
+- Channel opens that were already sent to lnd are still reconciled and recorded.
+
 ## Known limitations
 
 ### Fee increases after registration

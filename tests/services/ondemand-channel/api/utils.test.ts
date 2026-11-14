@@ -4,15 +4,18 @@ import Long from "long";
 import {
   getFeeChargeSat,
   getMinimumPaymentSat,
+  isChannelOpeningEnabled,
 } from "../../../../src/services/ondemand-channel/api/utils";
 
 jest.mock("config", () => ({
   get: jest.fn(),
+  has: jest.fn(),
 }));
 
 describe("on-demand channel fee configuration", () => {
   beforeEach(() => {
     (config.get as jest.Mock).mockReset();
+    (config.has as jest.Mock).mockReset();
   });
 
   test("uses the configured minimum payment multiplier", () => {
@@ -62,5 +65,29 @@ describe("on-demand channel fee configuration", () => {
     });
 
     expect(getMinimumPaymentSat(Long.ZERO)).toBe(1);
+  });
+
+  test("enables channel opening when channelOpeningEnabled is not configured", () => {
+    (config.has as jest.Mock).mockReturnValue(false);
+
+    expect(isChannelOpeningEnabled()).toBe(true);
+    expect(config.get).not.toBeCalled();
+  });
+
+  test("follows a configured channelOpeningEnabled boolean", () => {
+    (config.has as jest.Mock).mockReturnValue(true);
+
+    (config.get as jest.Mock).mockReturnValue(false);
+    expect(isChannelOpeningEnabled()).toBe(false);
+
+    (config.get as jest.Mock).mockReturnValue(true);
+    expect(isChannelOpeningEnabled()).toBe(true);
+  });
+
+  test("rejects a non-boolean channelOpeningEnabled", () => {
+    (config.has as jest.Mock).mockReturnValue(true);
+    (config.get as jest.Mock).mockReturnValue("false");
+
+    expect(() => isChannelOpeningEnabled()).toThrow("channelOpeningEnabled must be a boolean");
   });
 });

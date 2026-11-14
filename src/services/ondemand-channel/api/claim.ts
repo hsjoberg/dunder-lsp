@@ -7,6 +7,7 @@ import { getChannelRequestUnclaimedAmount } from "../../../db/ondemand-channel";
 import { checkPeerConnected, verifyMessage } from "../../../utils/lnd-api";
 import { openChannelForSettledHtlcs } from "../channel-open";
 import { IErrorResponse } from "../index";
+import { isChannelOpeningEnabled } from "./utils";
 
 export interface IClaimRequest {
   pubkey: string;
@@ -20,6 +21,15 @@ export interface IClaimResponse {
 
 export default function Claim(db: Database, lightning: Client): RouteHandlerMethod {
   return async (request, reply) => {
+    if (!isChannelOpeningEnabled()) {
+      reply.code(503);
+      const error: IErrorResponse = {
+        status: "ERROR",
+        reason: "Dunder is currently not opening channels. Please try again later.",
+      };
+      return error;
+    }
+
     const claimRequest = JSON.parse(request.body as string) as IClaimRequest;
     const allowZeroConfChannels = config.get<boolean>("allowZeroConfChannels") || false;
     const allowTaprootChannels = config.get<boolean>("allowTaprootChannels") || false;

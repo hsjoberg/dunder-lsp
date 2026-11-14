@@ -92,4 +92,7 @@ export function assertEnvironment() {
   config.get("backendConfig.cert");
   config.get("backendConfig.adminMacaroon");
   config.get("allowZeroConfChannels");
+  if (config.has("channelOpeningEnabled") && typeof config.get("channelOpeningEnabled") !== "boolean") {
+    throw new Error("channelOpeningEnabled must be a boolean");
+  }
 }

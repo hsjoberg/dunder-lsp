@@ -20,6 +20,7 @@ import {
   getFeeChargeSat,
   getMaximumPaymentSat,
   getMinimumPaymentSat,
+  isChannelOpeningEnabled,
 } from "./utils";
 import {
   checkPeerConnected,
@@ -77,6 +78,15 @@ export default function Register(
   subscribeHtlc(db, lightning);
 
   return async (request, reply) => {
+    if (!isChannelOpeningEnabled()) {
+      reply.code(503);
+      const error: IErrorResponse = {
+        status: "ERROR",
+        reason: "Dunder is currently not accepting new channel requests.",
+      };
+      return error;
+    }
+
     const registerRequest = JSON.parse(request.body as string) as IRegisterRequest;
 
     // Verify that the message is valid
@@ -239,6 +249,16 @@ export const createOnDemandChannelHtlcHandler = (
   const channelRequest = await getChannelRequest(db, request.outgoingRequestedChanId.toString());
   if (!channelRequest) {
     return noDecision();
+  }
+
+  // Never settle a payment for a channel request while channel opening is
+  // disabled: the payer would be charged for a channel that will not open.
+  if (!isChannelOpeningEnabled()) {
+    console.warn("Channel opening is disabled, failing HTLC for channel request", {
+      channelId: channelRequest.channelId,
+    });
+    doActionHtlc(routerrpc.ResolveHoldForwardAction.FAIL, writer, request.incomingCircuitKey);
+    return handled();
   }
 
   console.log("\n\nINTERCEPTING HTLC\n-----------");
