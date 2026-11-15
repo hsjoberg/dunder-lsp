@@ -18,6 +18,14 @@ export interface IServiceStatusResponse {
   minimumPaymentSat: number;
   maximumPaymentSat: number;
   peer: string;
+  /**
+   * How wallet requests may be signed. 1 (or absent, on older Dunder): the
+   * signature covers a fixed word such as "REGISTER". 2: the signature covers a
+   * JSON message with endpoint, domain, timestamp, nonce and the request data
+   * (see signed-request.ts). Version 1 is still accepted while
+   * `allowLegacySignatures` is on.
+   */
+  requestSigningVersion: number;
 }
 
 export default function ServiceStatus(
@@ -45,6 +53,7 @@ export default function ServiceStatus(
       minimumPaymentSat,
       maximumPaymentSat,
       peer: `${servicePubKey}@${lndNode}`,
+      requestSigningVersion: 2,
     };
     return response;
   };

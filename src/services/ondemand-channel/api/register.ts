@@ -2,18 +2,20 @@ import { Client } from "@grpc/grpc-js";
 import {
   IChannelRequestDB,
   checkAllHtclSettlementsSettled,
+  countOpenChannelRequests,
   createChannelRequest,
-  createHtlcSettlement,
+  createHtlcSettlements,
+  deleteFailedHtlcSettlement,
   getChannelRequest,
-  getHtlcSettlement,
-  updateHtlcSettlement,
+  getHtlcSettlementByCircuitKey,
+  hasHtlcSettlements,
+  markHtlcSettlementSettled,
 } from "../../../db/ondemand-channel";
 import {
   bytesToHexString,
   generateShortChannelId,
   hexToUint8Array,
   sha256,
-  timeout,
 } from "../../../utils/common";
 import {
   checkFeeTooHigh,
@@ -25,29 +27,25 @@ import {
 import {
   checkPeerConnected,
   estimateFee,
+  getInfo,
   subscribeHtlcEvents,
-  verifyMessage,
 } from "../../../utils/lnd-api";
-import {
-  handled,
-  HtlcHandler,
-  HtlcResponseWriter,
-  noDecision,
-} from "../../htlc-interceptor";
-import { differenceInSeconds, formatISO, getUnixTime } from "date-fns";
+import { handled, HtlcHandler, HtlcResponseWriter, noDecision } from "../../htlc-interceptor";
+import { getUnixTime } from "date-fns";
 import { lnrpc, routerrpc } from "../../../proto";
 
 import { Database } from "sqlite";
 import { IErrorResponse } from "../index";
 import Long from "long";
-import { MSAT } from "../../../utils/constants";
 import { RouteHandlerMethod } from "fastify";
 import config from "config";
 import { openChannelForSettledHtlcs } from "../channel-open";
+import { parseSignedEnvelope, verifySignedEnvelope } from "./signed-request";
+import { subscribeWithReconnect } from "../../../utils/reconnecting-stream";
 
 export interface IRegisterRequest {
   pubkey: string;
-  signature: string; // Message has to be REGISTER base64
+  signature: string; // Legacy scheme: the message is "REGISTER". See signed-request.ts.
   preimage: string;
   amountSat: number;
 }
@@ -61,60 +59,127 @@ export interface IRegisterOkResponse {
   feeProportionalMillionths: number;
 }
 
+const REGISTER_ENDPOINT = "/ondemand-channel/register";
+
+/** Seconds a registered request accepts payments. Blixt's invoice expiry is also 600s. */
+export const REQUEST_EXPIRY_SECONDS = 600;
+
+/**
+ * Extra seconds after expiry during which the first part of a payment is still
+ * accepted. Blixt creates its invoice (with its own 600s expiry, on the phone's
+ * clock) only after /register returns, so the invoice outlives the request by
+ * a few seconds plus any clock difference.
+ */
+export const REQUEST_EXPIRY_GRACE_SECONDS = 120;
+
+const DEFAULT_MAX_OPEN_REQUESTS_PER_PUBKEY = 5;
+
+const MSAT_PER_SAT = BigInt(1000);
+
+export function isValidPreimageHex(preimage: unknown): preimage is string {
+  return typeof preimage === "string" && /^[0-9a-fA-F]{64}$/.test(preimage);
+}
+
+/**
+ * Validates the request fields of a register request.
+ *
+ * The preimage is later sent to lnd in a SETTLE action. lnd rejects a preimage
+ * that is not exactly 32 bytes and drops the whole interceptor stream when it
+ * does, so this must be enforced before anything is stored.
+ */
+export function parseRegisterFields(
+  data: Record<string, unknown>,
+): { preimage: string; amountSat: number } | null {
+  const { preimage, amountSat } = data;
+  if (
+    !isValidPreimageHex(preimage) ||
+    typeof amountSat !== "number" ||
+    !Number.isSafeInteger(amountSat) ||
+    amountSat <= 0
+  ) {
+    return null;
+  }
+  // Normalise the hex so the UNIQUE constraint also catches case variants.
+  return { preimage: preimage.toLowerCase(), amountSat };
+}
+
+function getMaxOpenRequestsPerPubkey() {
+  return config.has("maxOpenRequestsPerPubkey")
+    ? config.get<number>("maxOpenRequestsPerPubkey")
+    : DEFAULT_MAX_OPEN_REQUESTS_PER_PUBKEY;
+}
+
+/**
+ * How long the parts of one payment are held while waiting for the rest.
+ * The old config key `htlcWaitMs` was always used as seconds despite its name.
+ */
+export function getHtlcWaitSeconds() {
+  if (config.has("htlcWaitSeconds")) {
+    return config.get<number>("htlcWaitSeconds");
+  }
+  if (config.has("htlcWaitMs")) {
+    return config.get<number>("htlcWaitMs");
+  }
+  return 60;
+}
+
+function errorResponse(reason: string): IErrorResponse {
+  return { status: "ERROR", reason };
+}
+
 export default function Register(
   db: Database,
   lightning: Client,
-  router: Client,
+  _router: Client,
   servicePubkey: string,
 ): RouteHandlerMethod {
-  // Start the HTLC interception
-  //
-  // interceptHtlc is used to intercept an incoming HTLC and either accept
-  // or deny it whether to open a channel or not.
-  //
-  // `subscribeHtlc` is used to check whether
-  // the incoming payment was settled, if yes we can
-  // open a channel to the requesting party.
-  subscribeHtlc(db, lightning);
-
   return async (request, reply) => {
     if (!isChannelOpeningEnabled()) {
       reply.code(503);
-      const error: IErrorResponse = {
-        status: "ERROR",
-        reason: "Dunder is currently not accepting new channel requests.",
-      };
-      return error;
+      return errorResponse("Dunder is currently not accepting new channel requests.");
     }
 
-    const registerRequest = JSON.parse(request.body as string) as IRegisterRequest;
-
-    // Verify that the message is valid
-    const verifyMessageResponse = await verifyMessage(
-      lightning,
-      "REGISTER",
-      registerRequest.signature,
-    );
-    if (registerRequest.pubkey !== verifyMessageResponse.pubkey) {
+    const envelope = parseSignedEnvelope(request.body, REGISTER_ENDPOINT, "REGISTER");
+    if (!envelope.ok) {
       reply.code(400);
-      const error: IErrorResponse = {
-        status: "ERROR",
-        reason:
-          "The Public key provided doesn't match with the public key extracted from the signature. " +
-          "Either the signature is wrong or you have signed with the wrong wallet.",
-      };
-      return error;
+      return errorResponse(envelope.reason);
+    }
+    const fields = parseRegisterFields(envelope.value.data);
+    if (!fields) {
+      reply.code(400);
+      return errorResponse(
+        "Invalid request. The preimage must be 32 bytes encoded as hex and " +
+          "amountSat must be a positive integer.",
+      );
+    }
+
+    const verified = await verifySignedEnvelope(lightning, envelope.value);
+    if (!verified.ok) {
+      reply.code(verified.statusCode ?? 400);
+      return errorResponse(verified.reason);
+    }
+    const pubkey = verified.value;
+
+    const openRequests = await countOpenChannelRequests(
+      db,
+      pubkey,
+      getUnixTime(new Date()),
+      REQUEST_EXPIRY_GRACE_SECONDS,
+    );
+    if (openRequests >= getMaxOpenRequestsPerPubkey()) {
+      reply.code(429);
+      return errorResponse(
+        "Too many unpaid requests. Pay or wait for an earlier invoice to expire first.",
+      );
     }
 
     // The maximum payment we'll accept
     const maximumPaymentSat = getMaximumPaymentSat();
-    if (registerRequest.amountSat > maximumPaymentSat) {
+    if (fields.amountSat > maximumPaymentSat) {
       reply.code(400);
-      const error: IErrorResponse = {
-        status: "ERROR",
-        reason: `The requested invoice is above the maximum limit of ${maximumPaymentSat} satoshi`,
-      };
-      return error;
+      return errorResponse(
+        `The requested invoice is above the maximum limit of ${maximumPaymentSat} satoshi`,
+      );
     }
 
     // Check if onchain fee is too high.
@@ -125,11 +190,7 @@ export default function Register(
     } catch (e) {
       // If we don't have enough funds we'll get here
       reply.code(503);
-      const error: IErrorResponse = {
-        status: "ERROR",
-        reason: "Dunder is temporarily offline.",
-      };
-      return error;
+      return errorResponse("Dunder is temporarily offline.");
     }
 
     const feesTooHigh = checkFeeTooHigh(
@@ -138,11 +199,9 @@ export default function Register(
     );
     if (feesTooHigh) {
       reply.code(503);
-      const error: IErrorResponse = {
-        status: "ERROR",
-        reason: "Dunder is currently not available because Bitcoin onchain fees are too high.",
-      };
-      return error;
+      return errorResponse(
+        "Dunder is currently not available because Bitcoin onchain fees are too high.",
+      );
     }
 
     // The minimum payment we'll accept.
@@ -152,24 +211,18 @@ export default function Register(
     //
     // A channel opening can also not be lower than the default minimum requirement by lnd.
     const minimumPaymentSat = getMinimumPaymentSat(estimateFeeResponse.feeSat);
-    if (registerRequest.amountSat < 1 || registerRequest.amountSat < minimumPaymentSat) {
+    if (fields.amountSat < minimumPaymentSat) {
       reply.code(400);
-      const error: IErrorResponse = {
-        status: "ERROR",
-        reason: `The requested invoice is below the minimum requirement of ${minimumPaymentSat.toString()} satoshi`,
-      };
-      return error;
+      return errorResponse(
+        `The requested invoice is below the minimum requirement of ${minimumPaymentSat.toString()} satoshi`,
+      );
     }
 
     // Check if the requester is connected to our Lightning node
     // If not we'll immediately fail.
-    if (!(await checkPeerConnected(lightning, registerRequest.pubkey))) {
+    if (!(await checkPeerConnected(lightning, pubkey))) {
       reply.code(400);
-      const error: IErrorResponse = {
-        status: "ERROR",
-        reason: "Wallet is not connected to Dunder's Lightning node.",
-      };
-      return error;
+      return errorResponse("Wallet is not connected to Dunder's Lightning node.");
     }
 
     // Generate a channelId and register the channel request to the database.
@@ -186,12 +239,12 @@ export default function Register(
 
     await createChannelRequest(db, {
       channelId: channelId.toString(),
-      pubkey: registerRequest.pubkey,
-      preimage: registerRequest.preimage,
+      pubkey,
+      preimage: fields.preimage,
       status: "REGISTERED",
       start: getUnixTime(new Date()),
-      expire: 600,
-      expectedAmountSat: registerRequest.amountSat,
+      expire: REQUEST_EXPIRY_SECONDS,
+      expectedAmountSat: fields.amountSat,
       channelPoint: null,
     });
 
@@ -208,366 +261,469 @@ export default function Register(
   };
 }
 
-// BOLT#4 Basic MPP require us to accumulate all part HTLCs and only settle all at once
-// when the expected total amount is reached.
-// Thus we store the HLTC write stream and all relevant info in memory.
-// HtlcHodl uses channelId as key.
-interface HtlcHodl {
-  [key: string]: {
-    writer: HtlcResponseWriter;
-    pubkey: string;
-    incomingChannelId: Long;
-    htlcId: Long;
-    incomingCircuitKey: routerrpc.ICircuitKey;
-    amountMsat: Long;
-    settled: boolean;
-  }[];
+/*
+ * Holding the parts of a payment
+ * ------------------------------
+ * BOLT#4 multi-part payments must be settled all at once, when the parts add
+ * up to the expected amount. The parts are held in memory, keyed by request
+ * (fake channel ID) and by lnd's incoming circuit key, so that an HTLC lnd
+ * sends again (it replays held HTLCs on a new interceptor stream) replaces its
+ * entry instead of being counted twice.
+ *
+ * Every held part gets exactly one answer:
+ *   - FAIL when the payment can't complete (timeout, overshoot, fees, ...)
+ *   - SETTLE once every part has been recorded in the database
+ * After SETTLE the database rows are the source of truth; an HTLC that shows
+ * up again is answered with SETTLE again.
+ */
+
+type HeldPart = {
+  incomingCircuitKey: routerrpc.ICircuitKey;
+  incomingChannelId: string;
+  htlcId: string;
+  amountMsat: bigint;
+  writer: HtlcResponseWriter;
+};
+
+type HeldPayment = {
+  channelId: string;
+  parts: Map<string, HeldPart>;
+  state: "COLLECTING" | "SETTLING";
+  settleSent: boolean;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+const heldPayments = new Map<string, HeldPayment>();
+
+function totalMsat(payment: HeldPayment) {
+  let total = BigInt(0);
+  for (const part of payment.parts.values()) {
+    total += part.amountMsat;
+  }
+  return total;
 }
-const interceptedHtlcHodl: HtlcHodl = {};
+
+function failHeldPayment(payment: HeldPayment, reason: string) {
+  console.warn("Failing held payment", {
+    channelId: payment.channelId,
+    parts: payment.parts.size,
+    reason,
+  });
+  clearTimeout(payment.timer);
+  if (heldPayments.get(payment.channelId) === payment) {
+    heldPayments.delete(payment.channelId);
+  }
+  for (const part of payment.parts.values()) {
+    part.writer.respond(routerrpc.ResolveHoldForwardAction.FAIL, part.incomingCircuitKey);
+  }
+}
 
 /**
- * interceptHtlc subscribes to lnd's `HtlcIntercept` bidi-stream  to be ablet to settle
- * incoming forwarding HTLCs.
- *
- * It does the following:
- * 1. Intercepts incoming HTLC's
- * 2. Checks if it's related to a channel request
- * 3. Adds it to an HTLC cache. In case it's an MPP payment we need to wait for all HTLCs before we settle
- * 4. Sends settlement action(s) to lnd once all HTLCs has been received
- * 5. Calls `openChannelWhenHtlcsSettled` that waits from settlement feedback from subscribeChannelEvents
- *
+ * The interceptor stream went away. lnd released the HTLCs it held (or will
+ * replay them on the next stream), so payments that are still being collected
+ * must not keep counting those parts. Payments already being settled finish
+ * on their own: their parts are recorded in the database first, and a replayed
+ * part is answered from there.
+ */
+export function dropHeldPaymentsAfterStreamReset() {
+  for (const [channelId, payment] of heldPayments) {
+    if (payment.state === "COLLECTING") {
+      clearTimeout(payment.timer);
+      heldPayments.delete(channelId);
+    }
+  }
+}
+
+/**
+ * lnd fails a held HTLC by itself when a new block reaches the HTLC's
+ * auto-fail height (incoming expiry minus 13 blocks). If Dunder answers that
+ * HTLC afterwards, lnd can't find it and ends the interceptor stream. Parts are
+ * therefore only held when at least this many blocks remain before that height,
+ * enough for the hold (`htlcWaitSeconds`) plus a slightly stale block height.
+ * Honest payments have far more room: Dunder's route hint alone adds 40 blocks.
+ */
+export const MIN_BLOCKS_BEFORE_AUTO_FAIL = 6;
+const LND_CLTV_REJECT_DELTA = 13;
+const BLOCK_HEIGHT_CACHE_MS = 15_000;
+
+let blockHeightCache: { expiresAt: number; height: Promise<number> } | null = null;
+
+function getCurrentBlockHeight(lightning: Client) {
+  const now = Date.now();
+  if (!blockHeightCache || blockHeightCache.expiresAt <= now) {
+    const height = getInfo(lightning).then((info) => info.blockHeight);
+    blockHeightCache = { expiresAt: now + BLOCK_HEIGHT_CACHE_MS, height };
+    height.catch(() => {
+      blockHeightCache = null;
+    });
+  }
+  return blockHeightCache.height;
+}
+
+async function isTooCloseToAutoFail(
+  lightning: Client,
+  request: routerrpc.ForwardHtlcInterceptRequest,
+) {
+  const autoFailHeight =
+    request.autoFailHeight > 0
+      ? request.autoFailHeight
+      : request.incomingExpiry - LND_CLTV_REJECT_DELTA;
+  let currentHeight: number;
+  try {
+    currentHeight = await getCurrentBlockHeight(lightning);
+  } catch (error) {
+    // Without a height the check can't run. lnd itself still refuses HTLCs
+    // that are already past the limit when they arrive.
+    console.error("Could not get the block height for the HTLC expiry check", error);
+    return false;
+  }
+  return autoFailHeight - currentHeight <= MIN_BLOCKS_BEFORE_AUTO_FAIL;
+}
+
+function isRequestExpired(channelRequest: IChannelRequestDB, nowUnix: number) {
+  return nowUnix > channelRequest.start + channelRequest.expire + REQUEST_EXPIRY_GRACE_SECONDS;
+}
+
+/**
+ * Intercepts HTLCs addressed to a fake channel ID handed out by /register.
  */
 export const createOnDemandChannelHtlcHandler = (
   db: Database,
   lightning: Client,
 ): HtlcHandler => async (request, writer) => {
-  const htlcWaitMs = config.get<number>("htlcWaitMs");
-  const maximumPaymentSat = getMaximumPaymentSat();
-
-  // Check if this HTLC outgoing channel Id is related to a channel request.
-  // If it's not, allow the shared interceptor to continue to the next handler.
-  const channelRequest = await getChannelRequest(db, request.outgoingRequestedChanId.toString());
+  const channelId = request.outgoingRequestedChanId.toString();
+  const channelRequest = await getChannelRequest(db, channelId);
   if (!channelRequest) {
     return noDecision();
   }
 
-  // Never settle a payment for a channel request while channel opening is
-  // disabled: the payer would be charged for a channel that will not open.
-  if (!isChannelOpeningEnabled()) {
-    console.warn("Channel opening is disabled, failing HTLC for channel request", {
-      channelId: channelRequest.channelId,
-    });
-    doActionHtlc(routerrpc.ResolveHoldForwardAction.FAIL, writer, request.incomingCircuitKey);
-    return handled();
-  }
+  const incomingChannelId = request.incomingCircuitKey?.chanId?.toString() ?? "0";
+  const htlcId = request.incomingCircuitKey?.htlcId?.toString() ?? "0";
+  const circuitKey = `${incomingChannelId}:${htlcId}`;
+  const amountMsat = BigInt(request.outgoingAmountMsat.toString());
 
-  console.log("\n\nINTERCEPTING HTLC\n-----------");
-  console.log(formatISO(new Date()));
-  console.log("outgoingAmountMsat", request.outgoingAmountMsat.toString());
-  console.log("outgoingRequestedChanId", request.outgoingRequestedChanId.toString());
-  console.log("incomingCircuitKey.chanId", request.incomingCircuitKey?.chanId?.toString());
-  console.log("incomingCircuitKey.htlcId", request.incomingCircuitKey?.htlcId?.toString());
-  console.log("outgoingAmountMsat.request.outgoingExpiry", request.outgoingExpiry.toString());
-  console.log("customRecords", JSON.stringify(request.customRecords));
-
-  // If we found this HTLC already in the database, we'll fail this HTLC.
-  // This is related to a bug in lnd where HTLCs are replayed.
-  if (
-    await getHtlcSettlement(
-      db,
-      request.outgoingRequestedChanId?.toString(),
-      request.incomingCircuitKey?.chanId?.toNumber() ?? 0,
-      request.incomingCircuitKey?.htlcId?.toNumber() ?? 0,
-    )
-  ) {
-    console.error("WARNING, already found settlement in database");
-    doActionHtlc(routerrpc.ResolveHoldForwardAction.FAIL, writer, request.incomingCircuitKey);
-    return handled();
-  }
-
-  console.log("MARKING UP INCOMING HTLC FOR SETTLEMENT");
-
-  // Check if the payment hash for the HTLC matches with the preimage that we got.
-  // Fail if it does not.
-  //
-  // We send INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS as the failure code so that probers can analyze
-  // the situation correctly.
-  // This is a violation of BOLT4, but it's not being used malicously.
-  const paymentHash = sha256(hexToUint8Array(channelRequest.preimage ?? ""));
-  if (bytesToHexString(request.paymentHash) !== paymentHash) {
-    // TODO error handling
-    console.error("Payment hash does not match");
-    doActionHtlc(
-      routerrpc.ResolveHoldForwardAction.FAIL,
-      writer,
-      request.incomingCircuitKey,
-      undefined,
-      lnrpc.Failure.FailureCode["INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS"],
-    );
-    return handled();
-  }
-
-  // Check if the requester is connected to our Lightning node.
-  // If not, we'll fail this HTLC
-  // TODO(hsjoberg): maybe this is too harsh
-  if (!(await checkPeerConnected(lightning, channelRequest.pubkey))) {
-    console.error("Wallet node not connected");
-    doActionHtlc(routerrpc.ResolveHoldForwardAction.FAIL, writer, request.incomingCircuitKey);
-    return handled();
-  }
-
-  const channelId = request.outgoingRequestedChanId.toString();
-
-  // If this is the first HTLC for this outgoing channel Id that we have encountered.
-  // Create a new hodl cache and start the timeout.
-  // Once all HTLCs have been registered and settled. `openChannelWhenHtlcsSettled` will open the
-  // payment channel to the requester.
-  if (!interceptedHtlcHodl[channelId]) {
-    interceptedHtlcHodl[channelId] = [];
-    // When the first HTLC for this payment is registed,
-    // we wait until we match expected amount, then settle everything.
-    openChannelWhenHtlcsSettled(db, lightning, channelRequest, htlcWaitMs);
-  }
-
-  // Add this HTLC to our hodl cache.
-  // A response writer is saved here. This is to be able to settle the HTLC later on
-  // in another interceptHtlc event.
-  interceptedHtlcHodl[channelId].push({
-    amountMsat: request.outgoingAmountMsat,
-    incomingChannelId: request.incomingCircuitKey?.chanId ?? Long.fromValue(0),
-    htlcId: request.incomingCircuitKey?.htlcId ?? Long.fromValue(0),
-    incomingCircuitKey: request.incomingCircuitKey!,
-    pubkey: channelRequest.pubkey,
-    writer,
-    settled: false,
+  console.log("Intercepted HTLC for on-demand channel", {
+    channelId,
+    circuitKey,
+    amountMsat: amountMsat.toString(),
+    outgoingExpiry: request.outgoingExpiry,
   });
 
-  // Check if the total amount matches up:
-  const total = interceptedHtlcHodl[channelId].reduce((prev, { amountMsat }) => {
-    return prev.add(amountMsat);
-  }, Long.fromValue(0));
+  // Always fails with lnd's default code (TEMPORARY_CHANNEL_FAILURE). lnd's
+  // interceptor rejects most other codes, including
+  // INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS, and ends the whole stream when it does.
+  const fail = (reason: string) => {
+    console.warn("Failing HTLC", { channelId, circuitKey, reason });
+    writer.respond(routerrpc.ResolveHoldForwardAction.FAIL, request.incomingCircuitKey);
+    return handled();
+  };
 
-  console.log("total", total.div(MSAT).toString());
-  console.log("expected", channelRequest.expectedAmountSat);
+  // For HTLCs the request can never accept, follow LSPS2 (bLIP-52) and fail
+  // with unknown_next_peer. lnd's interceptor can't send that code, but on
+  // RESUME lnd tries to forward to the fake channel ID, which doesn't exist,
+  // and fails the HTLC with unknown_next_peer itself.
+  const failAsUnknownChannel = (reason: string) => {
+    console.warn("Failing HTLC as unknown channel", { channelId, circuitKey, reason });
+    writer.respond(routerrpc.ResolveHoldForwardAction.RESUME, request.incomingCircuitKey);
+    return handled();
+  };
 
-  // Once the total amount matches the expected amount.
-  // We'll start the settling of HTLCs.
-  if (total.equals(Long.fromValue(channelRequest.expectedAmountSat).mul(MSAT))) {
-    console.log("Total adds up!");
+  // Requests stored before preimage validation existed may hold a preimage lnd
+  // would reject; never send it in a SETTLE action.
+  if (
+    !isValidPreimageHex(channelRequest.preimage) ||
+    bytesToHexString(request.paymentHash) !== sha256(hexToUint8Array(channelRequest.preimage))
+  ) {
+    return fail("Payment hash does not match");
+  }
+  const preimage = hexToUint8Array(channelRequest.preimage);
 
-    // Calculate how much we will subtract for fees
-    let feeResult: lnrpc.EstimateFeeResponse | undefined;
-    try {
-      // Check whether we can still do this transaction
-      feeResult = await estimateFee(lightning, Long.fromValue(maximumPaymentSat), 1);
-      // Known limitation: this checks only whether the fee leaves a positive
-      // push amount. If the estimate now exceeds Dunder's configured ceiling,
-      // the payment is still settled and channel opening is deferred until
-      // fees fall below that ceiling. Revisit this with the settlement design.
-      const feeChargeMsat = Long.fromValue(getFeeChargeSat(feeResult.feeSat)).mul(MSAT);
-      if (total.subtract(feeChargeMsat).lessThanOrEqual(0)) {
-        console.log("Too high fee");
-        for (const hodl of interceptedHtlcHodl[channelId]) {
-          doActionHtlc(
-            routerrpc.ResolveHoldForwardAction.FAIL,
-            hodl.writer,
-            hodl.incomingCircuitKey,
-          );
+  // An HTLC we already decided to settle (lnd replays held HTLCs, for example
+  // after a reconnect). Answer with the same decision.
+  const recorded = await getHtlcSettlementByCircuitKey(db, incomingChannelId, htlcId);
+  if (recorded) {
+    if (recorded.channelId !== channelId) {
+      return fail("Circuit key is recorded for a different request");
+    }
+    console.warn("HTLC was already recorded for settlement, settling it again", {
+      channelId,
+      circuitKey,
+    });
+    writer.respond(routerrpc.ResolveHoldForwardAction.SETTLE, request.incomingCircuitKey, preimage);
+    return handled();
+  }
+
+  // Never settle a new payment while channel opening is disabled: the payer
+  // would be charged for a channel that will not open. (HTLCs already recorded
+  // for settlement are answered above; failing one of those could leave a
+  // payment partly settled.)
+  if (!isChannelOpeningEnabled()) {
+    const payment = heldPayments.get(channelId);
+    if (payment && payment.state === "COLLECTING") {
+      failHeldPayment(payment, "Channel opening is disabled");
+    }
+    return fail("Channel opening is disabled");
+  }
+
+  const alreadyPaid = await hasHtlcSettlements(db, channelId);
+  const peerConnected = await checkPeerConnected(lightning, channelRequest.pubkey);
+  const tooCloseToAutoFail = await isTooCloseToAutoFail(lightning, request);
+
+  // Everything below runs without awaiting, so the held payment can't change
+  // underneath it.
+  let payment = heldPayments.get(channelId);
+
+  const knownPart = payment?.parts.get(circuitKey);
+  if (payment && knownPart) {
+    if (payment.settleSent) {
+      writer.respond(routerrpc.ResolveHoldForwardAction.SETTLE, request.incomingCircuitKey, preimage);
+    } else {
+      // Same HTLC on a new interceptor stream: answer it on the live stream.
+      knownPart.writer = writer;
+    }
+    return handled();
+  }
+
+  if (channelRequest.status !== "REGISTERED") {
+    return failAsUnknownChannel(`Request is ${channelRequest.status}`);
+  }
+  if (alreadyPaid) {
+    return failAsUnknownChannel("Request has already been paid");
+  }
+  if (payment?.state === "SETTLING") {
+    return failAsUnknownChannel("Payment is already being settled");
+  }
+  if (!payment && isRequestExpired(channelRequest, getUnixTime(new Date()))) {
+    return failAsUnknownChannel("Request has expired");
+  }
+  // TODO(hsjoberg): maybe this is too harsh
+  if (!peerConnected) {
+    return fail("Wallet node not connected");
+  }
+  if (tooCloseToAutoFail) {
+    return fail("HTLC expires too soon to be held");
+  }
+
+  const expectedMsat = BigInt(channelRequest.expectedAmountSat) * MSAT_PER_SAT;
+  const currentMsat = payment ? totalMsat(payment) : BigInt(0);
+  if (currentMsat + amountMsat > expectedMsat) {
+    return failAsUnknownChannel("Part would exceed the expected amount");
+  }
+
+  if (!payment) {
+    const newPayment: HeldPayment = {
+      channelId,
+      parts: new Map(),
+      state: "COLLECTING",
+      settleSent: false,
+      timer: setTimeout(() => {
+        if (heldPayments.get(channelId) === newPayment && newPayment.state === "COLLECTING") {
+          failHeldPayment(newPayment, "Timed out waiting for the remaining parts");
         }
-        return handled();
-      }
-    } catch (e) {
-      // TODO error handling
-      console.error("estimateFee failed", e);
-      for (const hodl of interceptedHtlcHodl[channelId]) {
-        doActionHtlc(
-          routerrpc.ResolveHoldForwardAction.FAIL,
-          hodl.writer,
-          hodl.incomingCircuitKey,
-        );
-      }
-      return handled();
-    }
-    for (const hodl of interceptedHtlcHodl[channelId]) {
-      console.log("Settling part HTLC", hodl.htlcId.toString());
-      // Send settlement action to bidi-stream
-      doActionHtlc(
-        routerrpc.ResolveHoldForwardAction.SETTLE,
-        hodl.writer,
-        hodl.incomingCircuitKey,
-        channelRequest.preimage,
-      );
+      }, getHtlcWaitSeconds() * 1000),
+    };
+    newPayment.timer.unref?.();
+    heldPayments.set(channelId, newPayment);
+    payment = newPayment;
+  }
 
-      // Create a settlement record in the database.
-      // `settled` is set to 0 (false) here because we are waiting for `subscribeHtlc` to
-      // acknowledge the settlement.
-      await createHtlcSettlement(db, {
-        channelId: request.outgoingRequestedChanId.toString(),
-        incomingChannelId: hodl.incomingChannelId.toNumber(),
-        htlcId: hodl.htlcId.toNumber(),
-        amountSat: hodl.amountMsat.div(MSAT).toNumber(),
-        amountMsat: hodl.amountMsat.toString(),
-        settled: 0,
-        claimed: 0,
-      });
-    }
+  payment.parts.set(circuitKey, {
+    incomingCircuitKey: request.incomingCircuitKey!,
+    incomingChannelId,
+    htlcId,
+    amountMsat,
+    writer,
+  });
+
+  const total = totalMsat(payment);
+  console.log("Held payment", {
+    channelId,
+    totalMsat: total.toString(),
+    expectedMsat: expectedMsat.toString(),
+  });
+
+  if (total === expectedMsat) {
+    payment.state = "SETTLING";
+    clearTimeout(payment.timer);
+    settleHeldPayment(db, lightning, channelRequest, payment, preimage).catch((error) => {
+      console.error("Unexpected error while settling held payment", error);
+    });
   }
 
   return handled();
 };
 
-const doActionHtlc = (
-  action: routerrpc.ResolveHoldForwardAction,
-  writer: HtlcResponseWriter,
-  incomingCircuitKey: routerrpc.ForwardHtlcInterceptRequest["incomingCircuitKey"],
-  preimage?: string,
-  failureCode?: lnrpc.Failure.FailureCode,
-) => {
-  writer.respond(
-    action,
-    incomingCircuitKey,
-    action === routerrpc.ResolveHoldForwardAction.SETTLE ? hexToUint8Array(preimage!) : undefined,
-    failureCode,
-  );
-};
-
-/**
- * openChannelWhenHtlcsSettled waits for HTLCs to be marked as settled in the database.
- * It is started by `interceptHtlc` when all incoming HTLCs has been registered and request
- * to settle has been sent.
- *
- * If any HTLC within the time period (timeoutMs config). The opening of channel to requesting party
- * will fail. To be able to claim those HTLCs that were settled, a `claim` request has to be done.
- */
-async function openChannelWhenHtlcsSettled(
+async function settleHeldPayment(
   db: Database,
   lightning: Client,
   channelRequest: IChannelRequestDB,
-  timeoutMs: number,
+  payment: HeldPayment,
+  preimage: Uint8Array,
 ) {
-  const channelId = channelRequest.channelId;
-  const start = new Date();
-  const allowZeroConfChannels = config.get<boolean>("allowZeroConfChannels") || false;
-  const allowTaprootChannels = config.get<boolean>("allowTaprootChannels") || false;
+  if (!isChannelOpeningEnabled()) {
+    // Disabled while the parts were being collected.
+    failHeldPayment(payment, "Channel opening is disabled");
+    return;
+  }
 
-  while (true) {
-    const result = await checkAllHtclSettlementsSettled(db, channelId);
-    if (!result) {
-      // Once the timeout is reached, we'll send a fail action to all pending HTLCs.
-      // If this happens, the requesting party has to do a `claim` request to claim coins
-      // for any settled HTLC.
-      if (differenceInSeconds(new Date(), start) > timeoutMs) {
-        console.warn("Timed out waiting for HTLC settlements.");
-        console.warn("Attempting to cancel any outstanding ones.");
-        for (const hodl of interceptedHtlcHodl[channelId]) {
-          if (!hodl.settled) {
-            console.warn("Rejecting", hodl.htlcId.toString());
-            doActionHtlc(
-              routerrpc.ResolveHoldForwardAction.FAIL,
-              hodl.writer,
-              hodl.incomingCircuitKey,
-            );
-          }
-        }
-        delete interceptedHtlcHodl[channelId];
-        return;
-      }
+  const maximumPaymentSat = getMaximumPaymentSat();
+  const total = totalMsat(payment);
 
-      console.log("HTLCs not settled yet waiting ...");
-      await timeout(1000);
-    } else {
-      // Count that all part HTLCs matches up with the total expected amount
-      const partTotalMsat = interceptedHtlcHodl[channelId].reduce((prev, { amountMsat }) => {
-        return prev.add(amountMsat);
-      }, Long.fromValue(0));
-
-      // Make sure all part HTLCs match up with the expected amount.
-      // Fail it this isn't the case. This should never happen.
-      if (partTotalMsat.div(MSAT).notEquals(channelRequest.expectedAmountSat)) {
-        console.error("FATAL ERROR: Total part HTLC amount mismatch with expected total amount");
-        break;
-      }
-
-      console.log("Opening channel", { pubkey: channelRequest.pubkey });
-      try {
-        const result = await openChannelForSettledHtlcs({
-          db,
-          lightning,
-          pubkey: channelRequest.pubkey,
-          source: "AUTOMATIC",
-          requestedChannelId: channelId,
-          requiredAmountSat: channelRequest.expectedAmountSat,
-          spendUnconfirmed: false,
-          zeroConf: allowZeroConfChannels,
-          taprootChannel: allowTaprootChannels,
-        });
-        if (result.status !== "OPENED") {
-          console.warn("Automatic channel open did not complete", {
-            channelId,
-            status: result.status,
-          });
-        }
-      } catch (error) {
-        console.error("Could not open channel", error);
-      }
-      delete interceptedHtlcHodl[channelId];
-      console.log("DONE");
-      break;
+  // Known limitation: this checks only whether the fee leaves a positive
+  // push amount. If the estimate now exceeds Dunder's configured ceiling, the
+  // payment is still settled and channel opening is deferred until fees fall
+  // below that ceiling.
+  try {
+    const feeResult = await estimateFee(lightning, Long.fromValue(maximumPaymentSat), 1);
+    const feeChargeMsat = BigInt(getFeeChargeSat(feeResult.feeSat)) * MSAT_PER_SAT;
+    if (total - feeChargeMsat <= BigInt(0)) {
+      failHeldPayment(payment, "On-chain fee is higher than the payment");
+      return;
     }
+  } catch (error) {
+    console.error("estimateFee failed", error);
+    failHeldPayment(payment, "Could not estimate the on-chain fee");
+    return;
+  }
+
+  const parts = [...payment.parts.values()];
+  try {
+    // Record every part before revealing the preimage. A settled HTLC must
+    // never exist without its row, or the recipient could not be paid out.
+    await createHtlcSettlements(
+      db,
+      parts.map((part) => ({
+        channelId: payment.channelId,
+        incomingChannelId: part.incomingChannelId,
+        htlcId: part.htlcId,
+        amountSat: Number(part.amountMsat / MSAT_PER_SAT),
+        amountMsat: part.amountMsat.toString(),
+        settled: 0,
+        claimed: 0,
+      })),
+    );
+  } catch (error) {
+    console.error("Could not record HTLC settlements", error);
+    failHeldPayment(payment, "Could not record the payment");
+    return;
+  }
+
+  payment.settleSent = true;
+  if (heldPayments.get(payment.channelId) === payment) {
+    heldPayments.delete(payment.channelId);
+  }
+  for (const part of parts) {
+    console.log("Settling part HTLC", {
+      channelId: payment.channelId,
+      incomingChannelId: part.incomingChannelId,
+      htlcId: part.htlcId,
+    });
+    part.writer.respond(
+      routerrpc.ResolveHoldForwardAction.SETTLE,
+      part.incomingCircuitKey,
+      preimage,
+    );
+  }
+  console.log("Waiting for lnd to confirm the settlement", {
+    channelId: channelRequest.channelId,
+  });
+}
+
+/*
+ * Tracking settlements
+ * --------------------
+ * lnd reports each HTLC's outcome on SubscribeHtlcEvents. A settled HTLC marks
+ * its row as settled; once every part of a request is settled, the channel is
+ * opened. An HTLC that lnd failed back instead (for example because it was
+ * released while the interceptor was disconnected) never paid us, so its row
+ * is removed. The recovery loop also opens channels for fully settled
+ * requests, in case an event was missed.
+ */
+
+const automaticOpensInFlight = new Set<string>();
+
+async function openChannelForSettledRequest(db: Database, lightning: Client, channelId: string) {
+  if (automaticOpensInFlight.has(channelId)) {
+    return;
+  }
+  automaticOpensInFlight.add(channelId);
+  try {
+    const channelRequest = await getChannelRequest(db, channelId);
+    if (!channelRequest || channelRequest.status !== "REGISTERED") {
+      return;
+    }
+    console.log("Opening channel", { pubkey: channelRequest.pubkey, channelId });
+    const result = await openChannelForSettledHtlcs({
+      db,
+      lightning,
+      pubkey: channelRequest.pubkey,
+      source: "AUTOMATIC",
+      requestedChannelId: channelId,
+      requiredAmountSat: channelRequest.expectedAmountSat,
+      zeroConf: config.get<boolean>("allowZeroConfChannels") || false,
+      taprootChannel: config.get<boolean>("allowTaprootChannels") || false,
+    });
+    if (result.status !== "OPENED") {
+      console.warn("Automatic channel open did not complete", {
+        channelId,
+        status: result.status,
+      });
+    }
+  } catch (error) {
+    console.error("Could not open channel", error);
+  } finally {
+    automaticOpensInFlight.delete(channelId);
   }
 }
 
-/**
- * subscribeHtlc subscribes to lnd's subscribeHtlcEvents stream.
- * If the HTLC is settled and related to a channel request, it will update the database.
- * The database update is then read by `openChannelWhenHtlcsSettled`.
- */
-const subscribeHtlc = (db: Database, router: Client) => {
-  const stream = subscribeHtlcEvents(router);
+export async function handleHtlcSettled(
+  db: Database,
+  lightning: Client,
+  incomingChannelId: string,
+  htlcId: string,
+) {
+  const newlySettled = await markHtlcSettlementSettled(db, incomingChannelId, htlcId);
+  if (!newlySettled) {
+    return;
+  }
+  const settlement = await getHtlcSettlementByCircuitKey(db, incomingChannelId, htlcId);
+  if (!settlement) {
+    return;
+  }
+  console.log("HTLC settled", { channelId: settlement.channelId, incomingChannelId, htlcId });
+  if (await checkAllHtclSettlementsSettled(db, settlement.channelId)) {
+    await openChannelForSettledRequest(db, lightning, settlement.channelId);
+  }
+}
 
-  stream.on("data", async (data) => {
-    const htlcEvent = routerrpc.HtlcEvent.decode(data);
-    if (!htlcEvent.settleEvent) {
-      return;
-    }
-
-    console.log("\nINCOMING HTLC EVENT\n-----------");
-    console.log("event", htlcEvent.event);
-    console.log("incomingHtlcId", htlcEvent.incomingHtlcId.toString());
-
-    const hodl = interceptedHtlcHodl[htlcEvent.outgoingChannelId.toString()]?.find(
-      ({ incomingChannelId, htlcId }) => {
-        return (
-          htlcEvent.incomingChannelId.equals(incomingChannelId) &&
-          htlcEvent.incomingHtlcId.equals(htlcId)
-        );
-      },
-    );
-    if (!hodl) {
-      console.log(`Could not find part HTLC
-incomingChannelId=${htlcEvent.incomingChannelId.toString()}
-htlcId=${htlcEvent.incomingHtlcId.toString()}`);
-      return;
-    } else {
-      hodl.settled = true;
-    }
-    const htlcSettlement = await getHtlcSettlement(
-      db,
-      htlcEvent.outgoingChannelId.toString(),
-      htlcEvent.incomingChannelId.toNumber(),
-      htlcEvent.incomingHtlcId.toNumber(),
-    );
-    if (!htlcSettlement) {
-      console.error(
-        `FATAL ERROR: Could not find htlcSettlement ` +
-          `(outgoingChannelId=${htlcEvent.outgoingChannelId.toString()} ` +
-          `incomingHtlcId=${htlcEvent.incomingHtlcId.toString()}) in database`,
-      );
-      return;
-    }
-    await updateHtlcSettlement(db, {
-      ...htlcSettlement,
-      settled: 1,
+export async function handleHtlcFailed(db: Database, incomingChannelId: string, htlcId: string) {
+  const settlement = await getHtlcSettlementByCircuitKey(db, incomingChannelId, htlcId);
+  if (!settlement || settlement.settled === 1) {
+    return;
+  }
+  if (await deleteFailedHtlcSettlement(db, incomingChannelId, htlcId)) {
+    console.error("lnd failed an HTLC that Dunder had decided to settle; removed its record", {
+      channelId: settlement.channelId,
+      incomingChannelId,
+      htlcId,
     });
-  });
-};
+  }
+}
+
+export function startHtlcSettlementTracking(db: Database, lightning: Client, router: Client) {
+  return subscribeWithReconnect(
+    () => subscribeHtlcEvents(router),
+    async (data) => {
+      const htlcEvent = routerrpc.HtlcEvent.decode(data);
+      const incomingChannelId = htlcEvent.incomingChannelId.toString();
+      const htlcId = htlcEvent.incomingHtlcId.toString();
+
+      if (htlcEvent.settleEvent || htlcEvent.finalHtlcEvent?.settled === true) {
+        await handleHtlcSettled(db, lightning, incomingChannelId, htlcId);
+      } else if (htlcEvent.finalHtlcEvent && htlcEvent.finalHtlcEvent.settled === false) {
+        await handleHtlcFailed(db, incomingChannelId, htlcId);
+      }
+    },
+    { name: "SubscribeHtlcEvents" },
+  );
+}

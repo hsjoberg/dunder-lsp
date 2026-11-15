@@ -29,6 +29,44 @@ interface IUser {
 }
 const users: Map<SocketStream, IUser> = new Map();
 
+/**
+ * Logins approved by a wallet, waiting for the browser to complete them.
+ * Keyed by the browser's pre-login session ID.
+ */
+const PENDING_LOGIN_TTL_MS = 2 * 60 * 1000;
+const pendingLogins: Map<string, { pubkey: string; expiresAt: number }> = new Map();
+
+function sweepPendingLogins(now: number) {
+  for (const [sessionId, pending] of pendingLogins) {
+    if (pending.expiresAt <= now) {
+      pendingLogins.delete(sessionId);
+    }
+  }
+}
+
+function isHex(value: unknown, minLength: number, maxLength: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= minLength &&
+    value.length <= maxLength &&
+    value.length % 2 === 0 &&
+    /^[0-9a-fA-F]+$/.test(value)
+  );
+}
+
+/** A browser WebSocket always sends Origin; it must be this server. */
+function isSameOrigin(request: FastifyRequest) {
+  const origin = request.headers.origin;
+  if (!origin) {
+    return true;
+  }
+  try {
+    return new URL(origin).host === request.headers.host;
+  } catch {
+    return false;
+  }
+}
+
 const AdminLogin = async function (app, { lightning, router }) {
   const db = await getDb();
 
@@ -41,9 +79,10 @@ const AdminLogin = async function (app, { lightning, router }) {
     "/login-ws",
     { websocket: true },
     async (connection: SocketStream, request: FastifyRequest) => {
-      // request.session.set("cookie", {
-      //   authenticated: true,
-      // });
+      if (!isSameOrigin(request)) {
+        connection.socket.close(1008, "Origin not allowed");
+        return;
+      }
 
       const serverDomain = config.get<string>("serverDomain");
 
@@ -80,7 +119,6 @@ const AdminLogin = async function (app, { lightning, router }) {
 
       connection.socket.on("close", () => {
         users.delete(connection);
-        console.log(users);
       });
     },
   );
@@ -88,15 +126,15 @@ const AdminLogin = async function (app, { lightning, router }) {
   app.get<{
     Querystring: LnUrlAuthQuerystring;
   }>("/login", async (request, reply: any) => {
-    if (typeof request.query !== "object") {
-      return;
-    }
-
-    if (typeof request.query.sig !== "string") {
+    const { k1, sig, key } = (request.query ?? {}) as Partial<LnUrlAuthQuerystring>;
+    if (!isHex(k1, 64, 64) || !isHex(sig, 16, 146) || !isHex(key, 66, 66)) {
+      reply.code(400);
+      const error: IErrorResponse = { status: "ERROR", reason: "Invalid LNURL-auth request." };
+      return error;
     }
 
     const u = [...users].filter(([_, user]) => {
-      return user.k1 === request.query.k1;
+      return user.k1 === k1;
     });
     if (u.length === 0) {
       reply.code(400);
@@ -108,12 +146,13 @@ const AdminLogin = async function (app, { lightning, router }) {
     }
 
     // Verify that the message is valid
-    const signature = secp256k1.signatureImport(hexToUint8Array(request.query.sig));
-    const valid = secp256k1.ecdsaVerify(
-      signature,
-      hexToUint8Array(request.query.k1),
-      hexToUint8Array(request.query.key),
-    );
+    let valid = false;
+    try {
+      const signature = secp256k1.signatureImport(hexToUint8Array(sig));
+      valid = secp256k1.ecdsaVerify(signature, hexToUint8Array(k1), hexToUint8Array(key));
+    } catch {
+      valid = false;
+    }
     if (!valid) {
       reply.code(400);
       const error: IErrorResponse = {
@@ -125,34 +164,61 @@ const AdminLogin = async function (app, { lightning, router }) {
       return error;
     }
 
-    if (!(await checkAdminPubkey(db, request.query.key))) {
+    if (!(await checkAdminPubkey(db, key))) {
       reply.code(400);
       const error: IErrorResponse = {
         status: "ERROR",
-        reason: `The public key "${request.query.key}" is not a valid administrator.`,
+        reason: `The public key "${key}" is not a valid administrator.`,
       };
       return error;
     }
 
-    await Promise.all(
-      u.map(async ([_, user]) => {
-        user.session.set<any>("authenticated", true);
-        user.session.set<any>("pubkey", request.query.key);
-        await user.session.save();
-      }),
-    );
-
-    await Promise.all(
-      u.map(([_, user]) => {
-        user.connection.socket.send(
-          JSON.stringify({
-            status: "OK",
-          }),
-        );
-      }),
-    );
+    // The browser completes the login itself (POST /login-complete), so it
+    // gets a fresh session ID. Each k1 can be used for one login only.
+    const now = Date.now();
+    sweepPendingLogins(now);
+    for (const [_, user] of u) {
+      pendingLogins.set(user.sessionId, { pubkey: key, expiresAt: now + PENDING_LOGIN_TTL_MS });
+      user.k1 = bytesToHexString(await generateBytes(32));
+      user.connection.socket.send(
+        JSON.stringify({
+          status: "OK",
+        }),
+      );
+    }
 
     return reply.send({ status: "OK" });
+  });
+
+  app.post("/login-complete", async (request, reply) => {
+    const now = Date.now();
+    sweepPendingLogins(now);
+    const previousSessionId = request.session.sessionId;
+    const pending = pendingLogins.get(previousSessionId);
+    if (!pending) {
+      reply.code(403);
+      const error: IErrorResponse = { status: "ERROR", reason: "No approved login found." };
+      return error;
+    }
+    pendingLogins.delete(previousSessionId);
+
+    if (!(await checkAdminPubkey(db, pending.pubkey))) {
+      reply.code(403);
+      const error: IErrorResponse = {
+        status: "ERROR",
+        reason: `The public key "${pending.pubkey}" is not a valid administrator.`,
+      };
+      return error;
+    }
+
+    // New session ID at login, so a session ID seen before login is useless.
+    await request.session.regenerate();
+    await new Promise<void>((resolve) =>
+      request.sessionStore.destroy(previousSessionId, () => resolve()),
+    );
+    request.session.set<any>("authenticated", true);
+    request.session.set<any>("pubkey", pending.pubkey);
+    return { status: "OK" };
   });
 } as FastifyPluginAsync<{ lightning: Client; router: Client }>;
 

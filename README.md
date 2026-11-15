@@ -58,6 +58,147 @@ The `master` branch always expects the latest version of lnd. Lnd compiled with 
 9. `npm run build`
 10. `npm start`
 
+## Running in production
+
+### lnd settings
+
+`store-final-htlc-resolutions` belongs in the `[Application Options]` section
+of `lnd.conf`, the top section that holds most of lnd's general options (it is
+in the same place in lnd's `sample-lnd.conf`). Add it under the existing
+section header rather than a second one, then restart lnd:
+
+```ini
+[Application Options]
+; ...your existing options...
+
+; Lets Dunder recover the outcome of an HTLC whose settle event it missed
+; (Dunder restart, stream reconnect). Without it such payments must be
+; checked by hand.
+store-final-htlc-resolutions=true
+```
+
+lnd only stores outcomes from the moment this is on; older HTLCs can't be
+looked up.
+
+Optional, in the `[routerrpc]` section:
+
+```ini
+[routerrpc]
+; While Dunder is disconnected, fail new forwards instead of forwarding them
+; unchecked, and keep HTLCs Dunder was holding so they are replayed when it
+; reconnects (fewer failed on-demand payments across Dunder restarts).
+; Cost: the node routes nothing while Dunder is down.
+routerrpc.requireinterceptor=true
+```
+
+### Restricted macaroon
+
+Dunder doesn't need lnd's `admin.macaroon`. Bake one limited to the RPCs it
+calls and point `backendConfig.adminMacaroon` at it:
+
+```sh
+lncli bakemacaroon --save_to dunder.macaroon \
+  uri:/lnrpc.Lightning/GetInfo \
+  uri:/lnrpc.Lightning/EstimateFee \
+  uri:/lnrpc.Lightning/NewAddress \
+  uri:/lnrpc.Lightning/WalletBalance \
+  uri:/lnrpc.Lightning/VerifyMessage \
+  uri:/lnrpc.Lightning/ListPeers \
+  uri:/lnrpc.Lightning/ListChannels \
+  uri:/lnrpc.Lightning/PendingChannels \
+  uri:/lnrpc.Lightning/ClosedChannels \
+  uri:/lnrpc.Lightning/LookupHtlcResolution \
+  uri:/lnrpc.Lightning/SubscribePeerEvents \
+  uri:/lnrpc.Lightning/OpenChannelSync \
+  uri:/routerrpc.Router/HtlcInterceptor \
+  uri:/routerrpc.Router/SubscribeHtlcEvents
+```
+
+### Reverse proxy (HTTPS)
+
+Dunder serves plain HTTP; put it behind a reverse proxy that terminates TLS.
+Two things depend on the proxy:
+
+- **Admin login.** When `serverDomain` starts with `https://`, the admin session
+  cookie is marked `Secure` and is only set when the request arrived over HTTPS,
+  which Dunder learns from the proxy's `X-Forwarded-Proto: https` header.
+  Without it, admin login silently fails.
+- **Per-IP rate limit.** Every request reaches Dunder from the proxy, so Dunder
+  sees the proxy's address as the client. `trustProxy` tells Dunder which
+  addresses are your proxy; for requests from those, it takes the real client
+  address from the `X-Forwarded-For` header instead. Without it, all clients
+  share one limit (`ipRateLimitPerMinute`), and a busy or abusive client blocks
+  everyone. Requests from other addresses are never trusted, so clients can't
+  pick their own address with a forged header.
+
+**Caddy** sends both headers by default (`X-Forwarded-Proto`, and
+`X-Forwarded-For` with the real client address, ignoring any value the client
+sent), and proxies the admin WebSocket without extra configuration:
+
+```caddyfile
+dunder.example.com {
+	reverse_proxy 127.0.0.1:8080
+}
+```
+
+With Caddy on the same machine, set in Dunder's config:
+
+```json
+"serverDomain": "https://dunder.example.com",
+"serverHost": "127.0.0.1:8080",
+"trustProxy": "loopback"
+```
+
+`loopback` trusts 127.0.0.1 and ::1 (Caddy may connect over either). If the
+proxy runs elsewhere, list its address instead (`"trustProxy": "10.0.0.5"`).
+Binding `serverHost` to 127.0.0.1 keeps Dunder reachable only through the proxy.
+`serverDomain` must be the address wallets use: Blixt signs requests for that
+host and Dunder rejects requests signed for another.
+
+**nginx** doesn't send these by default; add
+`proxy_set_header X-Forwarded-Proto $scheme;` and
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`, plus the usual
+WebSocket upgrade headers for `/admin/api/login-ws`.
+
+### Configuration
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `htlcWaitSeconds` | 60 | How long the parts of a multi-part payment are held while waiting for the rest. Replaces `htlcWaitMs`, which was always read as seconds. |
+| `allowLegacySignatures` | `true` | Accept wallet requests signed with the old fixed words (`REGISTER`, `CLAIM`, `CHECKSTATUS`). Turn off once wallets use signed messages. |
+| `maxOpenRequestsPerPubkey` | 5 | Unpaid, unexpired requests a wallet may have at once. |
+| `signedRequestRateLimitPerMinute` | 30 | Signed wallet requests accepted per pubkey per minute. |
+| `ipRateLimitPerMinute` | 120 | Requests to the public API (`/ondemand-channel/*`, `/getInfo`, `/estimateFee`) per client IP per minute. `0` turns it off. |
+| `backendConfig.tlsServerName` | `localhost` | Only used when `backendConfig.grpcServer` is an IP address: the TLS server name sent to lnd (Node 25 refuses IP addresses there). lnd's generated certificates always include `localhost`; set this only for a custom certificate. |
+| `trustProxy` | `false` | Addresses of your reverse proxy, whose `X-Forwarded-For` gives the real client address (e.g. `"loopback"`, `"10.0.0.5"`, a hop count, or `true` for any). **Set this when running behind a proxy**; see "Reverse proxy (HTTPS)". |
+
+### Signed wallet requests
+
+`/ondemand-channel/register`, `/claim` and `/check-status` take a body of
+
+```json
+{ "pubkey": "<hex, optional>", "message": "<signed JSON text>", "signature": "<lnd SignMessage signature>" }
+```
+
+where `message` is the exact JSON text that was signed:
+
+```json
+{
+  "endpoint": "/ondemand-channel/register",
+  "domain": "<host of Dunder's serverDomain>",
+  "timestamp": 1731628800,
+  "nonce": "<random string, 8-128 characters>",
+  "data": { "amountSat": 50000, "preimage": "<64 hex characters>" }
+}
+```
+
+Request fields are read from `data` (`claim` and `check-status` have none). A
+message is accepted within 30 seconds of its timestamp and only once.
+`domain` must match the host of Dunder's `serverDomain`, so wallets must reach
+Dunder under that name. `/ondemand-channel/service-status` returns
+`"requestSigningVersion": 2` so wallets know they can use this format. Version
+1, signing only a fixed word, is what older Dunder servers accept.
+
 # Admin interface
 
 <div>
@@ -72,6 +213,42 @@ LNURL-auth compatible wallet (for example [Blixt Wallet](https://blixtwallet.git
 `node scripts/create-admin-lnurl-auth.js <listen host:ip> <domain/IP to reach from)> <HTTPS (true/false)>`
 
 This will create a temporary HTTP server serving an LNURL-auth endpoint at /lnurl-auth.
+
+# Regtest integration tests
+
+`regtest/` runs Dunder against real lnd nodes (lnd v0.21.8) on a local regtest
+network in Docker:
+
+```
+payer --(public channel)--> lsp --(Dunder opens on demand)--> wallet
+```
+
+`lsp` is Dunder's node, `wallet` plays the Blixt wallet and `payer` pays the
+invoices. Dunder itself runs inside the test process, with zero-conf channels
+off as in production, so each payout channel is confirmed by mining blocks.
+
+```sh
+npm run regtest:up      # start bitcoind + 3 lnd nodes, fund them, open payer -> lsp
+npm run regtest:test    # run the scenarios in regtest/dunder.regtest.ts
+npm run regtest:down    # stop everything and delete regtest/.data
+
+npm run regtest -- status               # pubkeys, balances, channels
+npm run regtest -- mine 6               # mine blocks
+npm run regtest -- lncli lsp listchannels
+```
+
+The scenarios cover: a single-part and a multi-part payment paid out in a new
+channel, a probe with a wrong payment hash (fails, interceptor stays up), a
+payment above the registered amount (`unknown_next_peer`), a payment while the
+wallet is offline, the legacy signature format, and a payout channel the wallet
+rejects (Dunder records lnd's error and releases the payout after a minute for a
+later claim). The wallet runs a Blixt-like channel acceptor. Requires Docker; gRPC ports
+20009-20011 are bound to localhost.
+
+Note: after a payment fails at Dunder's hop, the payer's lnd avoids that route
+for a while (mission control), so a wallet that probes before paying gets "no
+route" for the real payment. The tests reset the payer's mission control
+between scenarios.
 
 # Test
 

@@ -10,3 +10,4 @@ src/proto.d.ts
 coverage
 .nyc_output
 .DS_Store
+regtest/.data

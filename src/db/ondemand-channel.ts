@@ -2,6 +2,7 @@ import { Database } from "sqlite";
 import Long from "long";
 
 import { MSAT } from "../utils/constants";
+import { withImmediateTransaction } from "./db";
 
 export type ChannelRequestStatus =
   | "NOT_REGISTERED"
@@ -24,8 +25,10 @@ export interface IChannelRequestDB {
 
 export interface IHtlcSettlementDB {
   channelId: string;
-  incomingChannelId: number;
-  htlcId: number;
+  /** Decimal string of lnd's uint64 incoming channel ID. */
+  incomingChannelId: string;
+  /** Decimal string of lnd's uint64 HTLC index on the incoming channel. */
+  htlcId: string;
   amountSat: number;
   amountMsat?: string | null;
   settled: number;
@@ -199,8 +202,8 @@ export async function createHtlcSettlement(
 export async function getHtlcSettlement(
   db: Database,
   channelId: string,
-  incomingChannelId: number,
-  htlcId: number,
+  incomingChannelId: string,
+  htlcId: string,
 ) {
   return db.get<IHtlcSettlementDB>(
     `SELECT * FROM htlcSettlement WHERE channelId = $channelId AND incomingChannelId = $incomingChannelId AND htlcId = $htlcId`,
@@ -251,4 +254,101 @@ export async function checkAllHtclSettlementsSettled(db: Database, channelId: st
   }
 
   return result.every(({ settled }) => settled === 1);
+}
+
+/**
+ * Records every part of a payment in one transaction before any SETTLE is sent
+ * to lnd, so a settled HTLC can never exist without its database row.
+ */
+export async function createHtlcSettlements(db: Database, settlements: IHtlcSettlementDB[]) {
+  await withImmediateTransaction(db, async (transactionDb) => {
+    for (const settlement of settlements) {
+      await createHtlcSettlement(transactionDb, settlement);
+    }
+  });
+}
+
+/** Looks up a settlement by lnd's incoming circuit key, which is unique per HTLC. */
+export function getHtlcSettlementByCircuitKey(
+  db: Database,
+  incomingChannelId: string,
+  htlcId: string,
+) {
+  return db.get<IHtlcSettlementDB>(
+    `SELECT * FROM htlcSettlement
+     WHERE incomingChannelId = $incomingChannelId AND htlcId = $htlcId`,
+    { $incomingChannelId: incomingChannelId, $htlcId: htlcId },
+  );
+}
+
+/** Returns true if the row was newly marked as settled. */
+export async function markHtlcSettlementSettled(
+  db: Database,
+  incomingChannelId: string,
+  htlcId: string,
+) {
+  const result = await db.run(
+    `UPDATE htlcSettlement
+     SET settled = 1
+     WHERE incomingChannelId = $incomingChannelId AND htlcId = $htlcId AND settled = 0`,
+    { $incomingChannelId: incomingChannelId, $htlcId: htlcId },
+  );
+  return (result.changes ?? 0) > 0;
+}
+
+/**
+ * Removes the record of an HTLC that lnd failed back instead of settling, so
+ * the money never arrived. Only unsettled, unreserved rows are removed.
+ */
+export async function deleteFailedHtlcSettlement(
+  db: Database,
+  incomingChannelId: string,
+  htlcId: string,
+) {
+  const result = await db.run(
+    `DELETE FROM htlcSettlement
+     WHERE incomingChannelId = $incomingChannelId
+       AND htlcId = $htlcId
+       AND settled = 0
+       AND claimed = 0
+       AND channelOpenAttemptId IS NULL`,
+    { $incomingChannelId: incomingChannelId, $htlcId: htlcId },
+  );
+  return (result.changes ?? 0) > 0;
+}
+
+export function getUnsettledHtlcSettlements(db: Database) {
+  return db.all<IHtlcSettlementDB[]>(`SELECT * FROM htlcSettlement WHERE settled = 0`);
+}
+
+export async function hasHtlcSettlements(db: Database, channelId: string) {
+  const row = await db.get<{ found: number }>(
+    `SELECT 1 AS found FROM htlcSettlement WHERE channelId = $channelId LIMIT 1`,
+    { $channelId: channelId },
+  );
+  return !!row;
+}
+
+/**
+ * Counts requests for a pubkey that can still receive a payment: registered,
+ * not expired and not paid yet.
+ */
+export async function countOpenChannelRequests(
+  db: Database,
+  pubkey: string,
+  nowUnix: number,
+  expiryGraceSeconds: number,
+) {
+  const row = await db.get<{ total: number }>(
+    `SELECT COUNT(*) AS total
+     FROM channelRequest
+     WHERE pubkey = $pubkey
+       AND status = 'REGISTERED'
+       AND start + expire + $grace > $now
+       AND NOT EXISTS (
+         SELECT 1 FROM htlcSettlement WHERE htlcSettlement.channelId = channelRequest.channelId
+       )`,
+    { $pubkey: pubkey, $grace: expiryGraceSeconds, $now: nowUnix },
+  );
+  return row?.total ?? 0;
 }

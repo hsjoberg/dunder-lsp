@@ -79,7 +79,10 @@ export function assertEnvironment() {
   config.get("env");
   config.get("serverHost");
   config.get("serverDomain");
-  config.get("htlcWaitMs");
+  // `htlcWaitSeconds` replaces `htlcWaitMs`, which was always used as seconds.
+  if (!config.has("htlcWaitSeconds")) {
+    config.get("htlcWaitMs");
+  }
   config.get("minimumPaymentMultiplier");
   config.get("maximumPaymentSat");
   config.get("fee");

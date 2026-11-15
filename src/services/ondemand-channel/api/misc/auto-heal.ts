@@ -5,6 +5,7 @@ import { Database } from "sqlite";
 import { getChannelRequestUnclaimedAmount } from "../../../../db/ondemand-channel";
 import { lnrpc } from "../../../../proto";
 import { subscribePeerEvents } from "../../../../utils/lnd-api";
+import { subscribeWithReconnect } from "../../../../utils/reconnecting-stream";
 import { openChannelForSettledHtlcs } from "../../channel-open";
 import { isChannelOpeningEnabled } from "../utils";
 
@@ -30,7 +31,6 @@ export async function openAutoHealChannelIfNeeded(
     lightning,
     pubkey,
     source: "AUTO_HEAL",
-    spendUnconfirmed: false,
     zeroConf: allowZeroConfChannels,
     taprootChannel: allowTaprootChannels,
   });
@@ -42,29 +42,31 @@ export async function openAutoHealChannelIfNeeded(
  * TODO test the peer-event integration
  */
 export default function AutoHeal(db: Database, lightning: Client, _router: Client) {
-  const stream = subscribePeerEvents(lightning);
+  return subscribeWithReconnect(
+    () => subscribePeerEvents(lightning),
+    async (data) => {
+      const peerEvent = lnrpc.PeerEvent.decode(data);
 
-  stream.on("data", async (data) => {
-    const peerEvent = lnrpc.PeerEvent.decode(data);
-
-    if (peerEvent.type === lnrpc.PeerEvent.EventType.PEER_OFFLINE) {
-      return;
-    }
-
-    try {
-      const result = await openAutoHealChannelIfNeeded(db, lightning, peerEvent.pubKey);
-      if (
-        result &&
-        result.status !== "OPENED" &&
-        result.status !== "NO_SETTLEMENTS"
-      ) {
-        console.warn("Autoheal: channel open did not complete", {
-          pubkey: peerEvent.pubKey,
-          status: result.status,
-        });
+      if (peerEvent.type === lnrpc.PeerEvent.EventType.PEER_OFFLINE) {
+        return;
       }
-    } catch (error) {
-      console.error("Autoheal: Could not open channel", error);
-    }
-  });
+
+      try {
+        const result = await openAutoHealChannelIfNeeded(db, lightning, peerEvent.pubKey);
+        if (
+          result &&
+          result.status !== "OPENED" &&
+          result.status !== "NO_SETTLEMENTS"
+        ) {
+          console.warn("Autoheal: channel open did not complete", {
+            pubkey: peerEvent.pubKey,
+            status: result.status,
+          });
+        }
+      } catch (error) {
+        console.error("Autoheal: Could not open channel", error);
+      }
+    },
+    { name: "SubscribePeerEvents" },
+  );
 }

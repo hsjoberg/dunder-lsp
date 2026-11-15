@@ -6,7 +6,7 @@ import { routerrpc } from "../../../../src/proto";
 import { IRegisterOkResponse } from "../../../../src/services/ondemand-channel/api/register";
 import build from "../../../../src/app";
 import { bytesToHexString, sha256Buffer, timeout } from "../../../../src/utils/common";
-import { createForwardHtlcInterceptRequest, sendRegisterRequest } from "./register-helpers";
+import { createForwardHtlcInterceptRequest, sendRegisterRequest, createPreimage } from "./register-helpers";
 
 jest.setTimeout(20 * 1000);
 
@@ -18,7 +18,7 @@ describe("/ondemand-channel/register", () => {
     const app = build();
 
     const amountSat = 20000;
-    const preimage = new Uint8Array([0]);
+    const preimage = createPreimage(0);
     const paymentHash = sha256Buffer(preimage);
     const pubkey = "abcdef12345";
     const signature = "validsig";

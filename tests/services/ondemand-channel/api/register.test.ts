@@ -9,14 +9,14 @@ import { bytesToHexString, sha256Buffer, timeout } from "../../../../src/utils/c
 
 // Mocked functions
 import { openChannelSync } from "../../../../mocks/utils/lnd-api";
-import { createForwardHtlcInterceptRequest, sendRegisterRequest } from "./register-helpers";
+import { createForwardHtlcInterceptRequest, sendRegisterRequest, createPreimage } from "./register-helpers";
 
 describe("/ondemand-channel/register", () => {
   test("registers and opens a channel when the HTLC are settled (non-MPP)", async () => {
     const app = build();
 
     const amountSat = 20000;
-    const preimage = new Uint8Array([0]);
+    const preimage = createPreimage(0);
     const paymentHash = sha256Buffer(preimage);
     const pubkey = "abcdef12345";
     const signature = "validsig";

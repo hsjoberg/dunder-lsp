@@ -58,8 +58,8 @@ describe("auto-heal", () => {
     });
     await createHtlcSettlement(db, {
       channelId: "auto-heal-channel",
-      incomingChannelId: 1,
-      htlcId: 1,
+      incomingChannelId: "1",
+      htlcId: "1",
       amountSat: 5000,
       settled: 1,
       claimed: 0,
@@ -70,7 +70,7 @@ describe("auto-heal", () => {
     ).resolves.toMatchObject({ status: "OPENED" });
 
     expect(openChannelSync).toBeCalledTimes(1);
+    expect((openChannelSync as jest.Mock).mock.calls[0][5]).toBe(true);
     expect((openChannelSync as jest.Mock).mock.calls[0][6]).toBe(true);
-    expect((openChannelSync as jest.Mock).mock.calls[0][7]).toBe(true);
   });
 });

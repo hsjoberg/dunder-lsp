@@ -29,6 +29,8 @@ type HtlcInterceptorCoordinatorOptions = {
   maxReconnectDelayMs?: number;
 };
 
+export type StreamResetListener = () => void;
+
 export const handled = (): HtlcHandlerResult => ({ status: "HANDLED" });
 export const noDecision = (): HtlcHandlerResult => ({ status: "NO_DECISION" });
 
@@ -42,6 +44,7 @@ export class HtlcInterceptorCoordinator {
   private reconnectAttempts = 0;
   private started = false;
   private stopped = false;
+  private readonly resetListeners = new Set<StreamResetListener>();
 
   constructor(
     streamOrFactory: HtlcInterceptorStream | HtlcInterceptorStreamFactory,
@@ -83,6 +86,30 @@ export class HtlcInterceptorCoordinator {
         this.stop();
       }
     };
+  }
+
+  /**
+   * Called whenever the current interceptor stream goes away. Responses written
+   * to that stream are discarded: lnd either released the HTLCs it held (the
+   * default `requireinterceptor=false`) or replays them on the next stream
+   * (`requireinterceptor=true`). Handlers that keep HTLCs in memory must drop
+   * them here.
+   */
+  onStreamReset(listener: StreamResetListener) {
+    this.resetListeners.add(listener);
+    return () => {
+      this.resetListeners.delete(listener);
+    };
+  }
+
+  private notifyStreamReset() {
+    for (const listener of this.resetListeners) {
+      try {
+        listener();
+      } catch (error) {
+        console.error("HTLC interceptor reset listener failed", error);
+      }
+    }
   }
 
   setHandlers(handlers: HtlcHandler[]) {
@@ -173,6 +200,7 @@ export class HtlcInterceptorCoordinator {
     }
 
     stream.cancel?.();
+    this.notifyStreamReset();
   }
 
   private closeStream() {
@@ -188,6 +216,7 @@ export class HtlcInterceptorCoordinator {
     stream.removeAllListeners?.("close");
     this.attachedStreams.delete(stream);
     stream.cancel?.();
+    this.notifyStreamReset();
   }
 
   async handle(
@@ -231,6 +260,23 @@ export class HtlcInterceptorCoordinator {
   }
 }
 
+/**
+ * The only failure codes lnd's interceptor accepts (routerrpc
+ * forward_interceptor.go, lnd 0.16 to 0.19). Any other code makes lnd end the
+ * interceptor stream. No code means TEMPORARY_CHANNEL_FAILURE.
+ */
+const LND_ACCEPTED_FAILURE_CODES = new Set<lnrpc.Failure.FailureCode>([
+  lnrpc.Failure.FailureCode.TEMPORARY_CHANNEL_FAILURE,
+  lnrpc.Failure.FailureCode.INVALID_ONION_HMAC,
+  lnrpc.Failure.FailureCode.INVALID_ONION_KEY,
+  lnrpc.Failure.FailureCode.INVALID_ONION_VERSION,
+]);
+
+/**
+ * Answers one intercepted HTLC. lnd ends the whole interceptor stream when a
+ * response fails, and answering a circuit that is no longer held is such a
+ * failure. Each writer therefore sends at most one response.
+ */
 class StreamHtlcResponseWriter implements HtlcResponseWriter {
   private didRespond = false;
 
@@ -246,14 +292,37 @@ class StreamHtlcResponseWriter implements HtlcResponseWriter {
     preimage?: Uint8Array,
     failureCode?: lnrpc.Failure.FailureCode,
   ) {
+    if (this.didRespond) {
+      console.error("Refusing to answer an intercepted HTLC twice", {
+        action,
+        chanId: incomingCircuitKey?.chanId?.toString(),
+        htlcId: incomingCircuitKey?.htlcId?.toString(),
+      });
+      return;
+    }
+    this.didRespond = true;
+
+    if (
+      action === routerrpc.ResolveHoldForwardAction.FAIL &&
+      failureCode !== undefined &&
+      !LND_ACCEPTED_FAILURE_CODES.has(failureCode)
+    ) {
+      console.error("Replacing a failure code lnd's interceptor would reject", { failureCode });
+      failureCode = undefined;
+    }
+
     const response = routerrpc.ForwardHtlcInterceptResponse.encode({
       action,
       incomingCircuitKey,
       preimage,
       failureCode,
     }).finish();
-    this.stream.write(response);
-    this.didRespond = true;
+    try {
+      this.stream.write(response);
+    } catch (error) {
+      // The stream is gone. lnd releases or replays the HTLC.
+      console.error("Could not answer intercepted HTLC", error);
+    }
   }
 }
 

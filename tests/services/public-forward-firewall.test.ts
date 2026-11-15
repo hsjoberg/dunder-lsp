@@ -84,28 +84,55 @@ describe("public-public forward blocker", () => {
     expect(lndApi.__listChannels).not.toBeCalled();
   });
 
-  test("has no decision when a channel is missing from ListChannels", async () => {
-    lndApi.__setListChannelsResponse({
-      channels: [{ chanId: Long.fromValue(1), private: false }],
-    });
-    const writes: routerrpc.ForwardHtlcInterceptResponse[] = [];
-    const blocker = createPublicPublicForwardBlocker({} as any);
-    const result = await blocker(request(Long.fromValue(1), Long.fromValue(2)), {
-      responded: false,
-      respond: jest.fn((action, incomingCircuitKey, preimage, failureCode) => {
-        writes.push(
-          routerrpc.ForwardHtlcInterceptResponse.create({
-            action,
-            incomingCircuitKey,
-            preimage,
-            failureCode,
-          }),
-        );
-      }),
-    });
+  test("lets the HTLC through when a channel is unknown even after refreshing", async () => {
+    const response = await runBlocker([{ chanId: Long.fromValue(1), private: false }]);
 
-    expect(result.status).toBe("NO_DECISION");
-    expect(writes).toHaveLength(0);
+    expect(response.action).toBe(routerrpc.ResolveHoldForwardAction.RESUME);
+    // The cached list is refreshed once before giving up.
+    expect(lndApi.__listChannels).toBeCalledTimes(2);
+  });
+
+  test("refreshes the cache for a channel opened after it was filled", async () => {
+    const blocker = createPublicPublicForwardBlocker({} as any);
+    const writes: routerrpc.ForwardHtlcInterceptResponse[] = [];
+    const coordinator = new HtlcInterceptorCoordinator(stream(writes), [blocker]);
+
+    lndApi.__setListChannelsResponse({
+      channels: [
+        { chanId: Long.fromValue(1), private: true },
+        { chanId: Long.fromValue(2), private: false },
+      ],
+    });
+    await coordinator.handle(request(Long.fromValue(1), Long.fromValue(2)));
+
+    lndApi.__setListChannelsResponse({
+      channels: [
+        { chanId: Long.fromValue(1), private: false },
+        { chanId: Long.fromValue(2), private: false },
+        { chanId: Long.fromValue(3), private: false },
+      ],
+    });
+    await coordinator.handle(request(Long.fromValue(1), Long.fromValue(3)));
+
+    expect(writes[1].action).toBe(routerrpc.ResolveHoldForwardAction.FAIL);
+    expect(lndApi.__listChannels).toBeCalledTimes(2);
+  });
+
+  test("recognises a channel by its alias", async () => {
+    const response = await runBlocker(
+      [
+        { chanId: Long.fromValue(1), private: false },
+        {
+          chanId: Long.fromValue(2),
+          private: false,
+          aliasScids: [Long.fromString("17592186044416000001", true)],
+        },
+      ],
+      Long.fromString("17592186044416000001", true),
+    );
+
+    expect(response.action).toBe(routerrpc.ResolveHoldForwardAction.FAIL);
+    expect(response.failureCode).toBe(lnrpc.Failure.FailureCode.TEMPORARY_CHANNEL_FAILURE);
   });
 
   test("resumes when ListChannels fails", async () => {
