@@ -73,6 +73,7 @@
     "coverage",
     "./*.js",
     "src/services/admin/react-admin",
-    "scripts"
+    "scripts",
+    "regtest"
   ]
 }
