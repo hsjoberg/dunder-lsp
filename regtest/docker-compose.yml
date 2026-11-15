@@ -1,0 +1,111 @@
+# Regtest network for Dunder integration tests. Managed by regtest/regtest.mjs.
+#
+#   payer --(public channel)--> lsp --(Dunder opens on demand)--> wallet
+#
+# lsp is Dunder's node, wallet stands in for a Blixt wallet, payer pays
+# invoices. lnd data directories are bind-mounted under regtest/.data so the
+# host can read TLS certificates and macaroons. gRPC ports are bound to
+# 127.0.0.1 only. Protocol flags match Blixt's lnd.conf. Dunder runs with
+# zero-conf channels off, as in production, so payouts confirm on-chain.
+
+x-lnd: &lnd
+  image: lightninglabs/lnd:v0.21.8-beta
+  restart: unless-stopped
+  depends_on:
+    bitcoind:
+      condition: service_healthy
+
+services:
+  bitcoind:
+    image: bitcoin/bitcoin:31.1
+    command:
+      - bitcoind
+      - -regtest
+      - -printtoconsole
+      - -server
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -rpcuser=dunder
+      - -rpcpassword=dunder
+      - -fallbackfee=0.0002
+    healthcheck:
+      test: ["CMD-SHELL", "bitcoin-cli -regtest -rpcuser=dunder -rpcpassword=dunder getblockchaininfo || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  lsp:
+    <<: *lnd
+    command:
+      - --alias=dunder-lsp
+      - --store-final-htlc-resolutions
+      - --bitcoin.regtest
+      - --bitcoin.node=bitcoind
+      - --bitcoind.rpchost=bitcoind:18443
+      - --bitcoind.rpcuser=dunder
+      - --bitcoind.rpcpass=dunder
+      - --bitcoind.rpcpolling
+      - --noseedbackup
+      - --debuglevel=info
+      - --rpclisten=0.0.0.0:10009
+      - --listen=0.0.0.0:9735
+      - --tlsextradomain=localhost
+      - --tlsextraip=127.0.0.1
+      - --protocol.zero-conf
+      - --protocol.option-scid-alias
+      - --protocol.simple-taproot-chans
+      - --maxpendingchannels=10
+    volumes:
+      - ./.data/lsp:/root/.lnd
+    ports:
+      - "127.0.0.1:20009:10009"
+
+  wallet:
+    <<: *lnd
+    command:
+      - --alias=wallet
+      - --bitcoin.regtest
+      - --bitcoin.node=bitcoind
+      - --bitcoind.rpchost=bitcoind:18443
+      - --bitcoind.rpcuser=dunder
+      - --bitcoind.rpcpass=dunder
+      - --bitcoind.rpcpolling
+      - --noseedbackup
+      - --debuglevel=info
+      - --rpclisten=0.0.0.0:10009
+      - --listen=0.0.0.0:9735
+      - --tlsextradomain=localhost
+      - --tlsextraip=127.0.0.1
+      - --protocol.zero-conf
+      - --protocol.option-scid-alias
+      - --protocol.simple-taproot-chans
+      - --maxpendingchannels=10
+    volumes:
+      - ./.data/wallet:/root/.lnd
+    ports:
+      - "127.0.0.1:20010:10009"
+
+  payer:
+    <<: *lnd
+    command:
+      - --alias=payer
+      - --bitcoin.regtest
+      - --bitcoin.node=bitcoind
+      - --bitcoind.rpchost=bitcoind:18443
+      - --bitcoind.rpcuser=dunder
+      - --bitcoind.rpcpass=dunder
+      - --bitcoind.rpcpolling
+      - --noseedbackup
+      - --debuglevel=info
+      - --rpclisten=0.0.0.0:10009
+      - --listen=0.0.0.0:9735
+      - --tlsextradomain=localhost
+      - --tlsextraip=127.0.0.1
+      - --protocol.zero-conf
+      - --protocol.option-scid-alias
+      - --protocol.simple-taproot-chans
+      - --maxpendingchannels=10
+    volumes:
+      - ./.data/payer:/root/.lnd
+    ports:
+      - "127.0.0.1:20011:10009"

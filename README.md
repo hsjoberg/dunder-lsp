@@ -213,6 +213,40 @@ LNURL-auth compatible wallet (for example [Blixt Wallet](https://blixtwallet.git
 
 This will create a temporary HTTP server serving an LNURL-auth endpoint at /lnurl-auth.
 
+# Regtest integration tests
+
+`regtest/` runs Dunder against real lnd nodes (lnd v0.21.8) on a local regtest
+network in Docker:
+
+```
+payer --(public channel)--> lsp --(Dunder opens on demand)--> wallet
+```
+
+`lsp` is Dunder's node, `wallet` plays the Blixt wallet and `payer` pays the
+invoices. Dunder itself runs inside the test process, with zero-conf channels
+off as in production, so each payout channel is confirmed by mining blocks.
+
+```sh
+npm run regtest:up      # start bitcoind + 3 lnd nodes, fund them, open payer -> lsp
+npm run regtest:test    # run the scenarios in regtest/dunder.regtest.ts
+npm run regtest:down    # stop everything and delete regtest/.data
+
+npm run regtest -- status               # pubkeys, balances, channels
+npm run regtest -- mine 6               # mine blocks
+npm run regtest -- lncli lsp listchannels
+```
+
+The scenarios cover: a single-part and a multi-part payment paid out in a new
+channel, a probe with a wrong payment hash (fails, interceptor stays up), a
+payment above the registered amount (`unknown_next_peer`), a payment while the
+wallet is offline, and the legacy signature format. Requires Docker; gRPC ports
+20009-20011 are bound to localhost.
+
+Note: after a payment fails at Dunder's hop, the payer's lnd avoids that route
+for a while (mission control), so a wallet that probes before paying gets "no
+route" for the real payment. The tests reset the payer's mission control
+between scenarios.
+
 # Test
 
 To do tests run `npm run test` or `npm run test:coverage`.

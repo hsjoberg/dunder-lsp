@@ -11,7 +11,12 @@ export default async function getDb(forceReopen: boolean = false) {
   }
 
   db = await open({
-    filename: config.get<string>("env") === "test" ? ":memory:" : "./database.db",
+    filename:
+      config.get<string>("env") === "test"
+        ? ":memory:"
+        : config.has("databasePath")
+          ? config.get<string>("databasePath")
+          : "./database.db",
     driver: sqlite3.Database,
   });
   db.configure("busyTimeout", SQLITE_BUSY_TIMEOUT_MS);

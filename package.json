@@ -8,6 +8,10 @@
     "watch": "concurrently \"tsc -p tsconfig.json -w\" \"nodemon -w dist dist/server.js\"",
     "proto": "pbjs --force-long -t static-module -o src/proto.js proto/rpc.proto proto/router.proto && pbts -o src/proto.d.ts src/proto.js",
     "test": "jest tests",
+    "regtest": "node regtest/regtest.mjs",
+    "regtest:up": "node regtest/regtest.mjs up",
+    "regtest:test": "node regtest/regtest.mjs test",
+    "regtest:down": "node regtest/regtest.mjs down",
     "test:coverage": "jest --coverage --coveragePathIgnorePatterns \"proto\\.js|mocks\" tests"
   },
   "version": "1.0.0",
