@@ -52,6 +52,35 @@ beforeAll(async () => {
   payer = createClients("payer");
   walletPubkey = (await getInfo(wallet.lightning)).identityPubkey;
 
+  // lnd treats a chain whose newest block is a few hours old as not synced and
+  // refuses to open channels, so mine one when the network has sat idle.
+  mine(1);
+  const lsp = createClients("lsp");
+  try {
+    for (const node of [lsp, wallet, payer]) {
+      await waitFor(
+        "lnd to sync to the chain",
+        async () => (await getInfo(node.lightning)).syncedToChain,
+      );
+    }
+  } finally {
+    closeClients(lsp);
+  }
+  // An earlier, interrupted run can leave failed opens (which hold payouts back
+  // with a backoff) and payments it never paid out (which Dunder's recovery
+  // would pay out at startup, spending the LSP's confirmed coins mid-test).
+  const db = await getDb();
+  await db.run(
+    "DELETE FROM channelOpenAttempt WHERE pubkey = ? AND status = 'CANCELLED'",
+    walletPubkey,
+  );
+  await db.run(
+    `UPDATE htlcSettlement SET claimed = 1
+     WHERE claimed = 0 AND channelOpenAttemptId IS NULL
+       AND channelId IN (SELECT channelId FROM channelRequest WHERE pubkey = ?)`,
+    walletPubkey,
+  );
+
   // Record any interceptor stream trouble while the tests run.
   const originalError = console.error;
   jest.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
@@ -99,7 +128,11 @@ async function register(amountSat: number, signing: "message" | "legacy" = "mess
       nonce: randomBytes(16).toString("hex"),
       data: { amountSat, preimage: preimage.toString("hex") },
     });
-    body = { pubkey: walletPubkey, message, signature: await signMessage(wallet.lightning, message) };
+    body = {
+      pubkey: walletPubkey,
+      message,
+      signature: await signMessage(wallet.lightning, message),
+    };
   } else {
     body = {
       pubkey: walletPubkey,
@@ -285,7 +318,10 @@ describe("Dunder on regtest", () => {
       expect(payment.status).toBe(PaymentStatus.FAILED);
       expect(htlcFailureCodes(payment)).toContain(FailureCode.TEMPORARY_CHANNEL_FAILURE);
       const db = await getDb();
-      const rows = await db.all("SELECT * FROM htlcSettlement WHERE channelId = ?", registration.fakeChannelId);
+      const rows = await db.all(
+        "SELECT * FROM htlcSettlement WHERE channelId = ?",
+        registration.fakeChannelId,
+      );
       expect(rows).toEqual([]);
     } finally {
       await connectPeer(wallet.lightning, lspPubkey, "lsp:9735");
@@ -316,11 +352,13 @@ describe("Dunder on regtest", () => {
       expect(describePayment(payment)).toMatchObject({ status: "SUCCEEDED" });
 
       const failed = await waitFor("the open to fail", () =>
-        db.get<{ attemptId: string; status: string; failureKind: string; error: string }>(
-          `SELECT attemptId, status, failureKind, error FROM channelOpenAttempt
+        db
+          .get<{ attemptId: string; status: string; failureKind: string; error: string }>(
+            `SELECT attemptId, status, failureKind, error FROM channelOpenAttempt
            WHERE attemptId = (SELECT channelOpenAttemptId FROM htlcSettlement WHERE channelId = ? LIMIT 1)`,
-          registration.fakeChannelId,
-        ).then((row) => (row?.status === "UNKNOWN" ? row : null)),
+            registration.fakeChannelId,
+          )
+          .then((row) => (row?.status === "UNKNOWN" ? row : null)),
       );
       // lnd answered with the peer's error, so nothing can have been funded.
       expect(failed.failureKind).toBe("LND_REJECTED");
@@ -342,7 +380,9 @@ describe("Dunder on regtest", () => {
 
       // The settled payment is free to be paid out again (claim, auto-heal or
       // recovery), after the backoff.
-      const settlements = await db.all<{ settled: number; claimed: number; channelOpenAttemptId: string | null }[]>(
+      const settlements = await db.all<
+        { settled: number; claimed: number; channelOpenAttemptId: string | null }[]
+      >(
         "SELECT settled, claimed, channelOpenAttemptId FROM htlcSettlement WHERE channelId = ?",
         registration.fakeChannelId,
       );
@@ -368,7 +408,10 @@ describe("Dunder on regtest", () => {
         "UPDATE channelRequest SET status = 'DONE', automaticOpenQueued = 0 WHERE channelId = ?",
         registration.fakeChannelId,
       );
-      await db.run("DELETE FROM channelOpenAttempt WHERE pubkey = ? AND status = 'CANCELLED'", walletPubkey);
+      await db.run(
+        "DELETE FROM channelOpenAttempt WHERE pubkey = ? AND status = 'CANCELLED'",
+        walletPubkey,
+      );
     }
   });
 
