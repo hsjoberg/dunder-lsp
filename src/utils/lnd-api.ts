@@ -30,7 +30,7 @@ export async function estimateFee(lightning: Client, amount: Long, targetConf: n
 
   const response = await grpcMakeUnaryRequest<lnrpc.EstimateFeeResponse>(
     lightning,
-    "lnrpc.Lightning/EstimateFee",
+    "/lnrpc.Lightning/EstimateFee",
     estimateFeeRequest,
     lnrpc.EstimateFeeResponse.decode,
   );
@@ -131,7 +131,7 @@ export async function openChannelSync(
 
   return await grpcMakeUnaryRequest<lnrpc.ChannelPoint>(
     lightning,
-    "lnrpc.Lightning/OpenChannelSync",
+    "/lnrpc.Lightning/OpenChannelSync",
     openChannelSyncRequest,
     lnrpc.ChannelPoint.decode,
   );
@@ -162,7 +162,7 @@ export function subscribeHtlcEvents(router: Client) {
 export function subscribeChannelEvents(lightning: Client) {
   const request = lnrpc.ChannelEventSubscription.encode({}).finish();
   return lightning.makeServerStreamRequest(
-    "/routerrpc.Lightning/SubscribeChannelEvents",
+    "/lnrpc.Lightning/SubscribeChannelEvents",
     (arg: any) => arg,
     (arg) => arg,
     request,
