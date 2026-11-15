@@ -2,12 +2,7 @@ import { FastifyPluginAsync } from "fastify";
 import { Client } from "@grpc/grpc-js";
 import config from "config";
 
-import {
-  handled,
-  HtlcHandler,
-  noDecision,
-  startHtlcInterceptor,
-} from "../htlc-interceptor";
+import { handled, HtlcHandler, noDecision, startHtlcInterceptor } from "../htlc-interceptor";
 import { lnrpc, routerrpc } from "../../proto";
 import { listChannels } from "../../utils/lnd-api";
 
@@ -25,17 +20,26 @@ export function createPublicPublicForwardBlocker(lightning: Client): HtlcHandler
     publicByChannelId: new Map(),
   };
 
-  const getVisibility = async () => {
+  const getVisibility = async (forceRefresh = false) => {
     const now = Date.now();
-    if (now < cache.expiresAt) {
+    if (!forceRefresh && now < cache.expiresAt) {
       return cache.publicByChannelId;
     }
 
     const response = await listChannels(lightning);
     const publicByChannelId = new Map<string, boolean>();
     for (const channel of response.channels) {
+      const isPublic = !channel.private;
       if (channel.chanId) {
-        publicByChannelId.set(channel.chanId.toString(), !channel.private);
+        publicByChannelId.set(channel.chanId.toString(), isPublic);
+      }
+      // HTLCs can name a channel by one of its aliases (zero-conf, scid-alias).
+      for (const alias of channel.aliasScids ?? []) {
+        publicByChannelId.set(alias.toString(), isPublic);
+      }
+      const peerScidAlias = channel.peerScidAlias?.toString();
+      if (peerScidAlias && peerScidAlias !== "0") {
+        publicByChannelId.set(peerScidAlias, isPublic);
       }
     }
 
@@ -59,9 +63,16 @@ export function createPublicPublicForwardBlocker(lightning: Client): HtlcHandler
       return handled();
     }
 
+    // This is a liquidity policy, not a security boundary. When it can't tell
+    // whether a forward is public-to-public it lets the HTLC through, so
+    // Blixt users' payments never fail because of the check itself.
     let visibility: Map<string, boolean>;
     try {
       visibility = await getVisibility();
+      if (!visibility.has(incomingChannelId) || !visibility.has(outgoingChannelId)) {
+        // A channel opened since the cache was filled.
+        visibility = await getVisibility(true);
+      }
     } catch (error) {
       console.error("Could not list channels for public-public HTLC check, resuming", error);
       writer.respond(routerrpc.ResolveHoldForwardAction.RESUME, request.incomingCircuitKey);

@@ -1,0 +1,8 @@
+.git
+node_modules
+src/services/admin/react-admin/node_modules
+src/services/admin/react-admin/build
+dist
+database.db
+config/default.json
+config/production.json
