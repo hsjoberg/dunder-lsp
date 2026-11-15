@@ -8,6 +8,10 @@ import { FastifyInstance } from "fastify";
 import build from "../src/app";
 import getDb from "../src/db/db";
 import { getChannelRequest } from "../src/db/ondemand-channel";
+import {
+  LND_REJECTED_RELEASE_DELAY_MS,
+  openChannelForSettledHtlcs,
+} from "../src/services/ondemand-channel/channel-open";
 import { lnrpc } from "../src/proto";
 import { IRegisterOkResponse } from "../src/services/ondemand-channel/api/register";
 import { getServiceDomain } from "../src/services/ondemand-channel/api/signed-request";
@@ -23,6 +27,7 @@ import {
   listChannels,
   mine,
   resetMissionControl,
+  runChannelAcceptor,
   sendPayment,
   signMessage,
   waitFor,
@@ -36,6 +41,7 @@ let app: FastifyInstance;
 let wallet: ILndClients;
 let payer: ILndClients;
 let walletPubkey: string;
+let acceptor: ReturnType<typeof runChannelAcceptor>;
 let lspPubkey: string;
 let minimumPaymentSat: number;
 const interceptorErrors: string[] = [];
@@ -57,6 +63,8 @@ beforeAll(async () => {
 
   app = build();
   await app.ready();
+  // Blixt runs a channel acceptor too.
+  acceptor = runChannelAcceptor(wallet.lightning);
   await connectPeer(wallet.lightning, lspPubkey, "lsp:9735");
 
   const status = (await app.inject({ url: "/ondemand-channel/service-status" })).json();
@@ -73,6 +81,7 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
+  acceptor?.stop();
   await app?.close();
   if (wallet) closeClients(wallet);
   if (payer) closeClients(payer);
@@ -292,6 +301,75 @@ describe("Dunder on regtest", () => {
 
     expect(describePayment(payment)).toMatchObject({ status: "SUCCEEDED" });
     await expectPayout(registration.fakeChannelId);
+  });
+
+  // Runs last: afterwards the wallet's payouts are in a retry backoff.
+  test("a channel open the wallet rejects is released for a later payout", async () => {
+    const db = await getDb();
+    const amountSat = amount(2);
+    const { preimage, registration } = await register(amountSat);
+    const paymentRequest = await createInvoice(preimage, registration, amountSat);
+    acceptor.rejectFrom(lspPubkey);
+    try {
+      // The payment itself succeeds; only the payout channel is refused.
+      const payment = await sendPayment(payer.router, { paymentRequest });
+      expect(describePayment(payment)).toMatchObject({ status: "SUCCEEDED" });
+
+      const failed = await waitFor("the open to fail", () =>
+        db.get<{ attemptId: string; status: string; failureKind: string; error: string }>(
+          `SELECT attemptId, status, failureKind, error FROM channelOpenAttempt
+           WHERE attemptId = (SELECT channelOpenAttemptId FROM htlcSettlement WHERE channelId = ? LIMIT 1)`,
+          registration.fakeChannelId,
+        ).then((row) => (row?.status === "UNKNOWN" ? row : null)),
+      );
+      // lnd answered with the peer's error, so nothing can have been funded.
+      expect(failed.failureKind).toBe("LND_REJECTED");
+      expect(failed.error).toMatch(/rejected/i);
+
+      // The recovery loop (every 10s) releases it once the delay has passed.
+      const released = await waitFor(
+        "the failed open to be released",
+        () =>
+          db
+            .get<{ status: string }>(
+              "SELECT status FROM channelOpenAttempt WHERE attemptId = ?",
+              failed.attemptId,
+            )
+            .then((row) => (row?.status === "CANCELLED" ? row : null)),
+        LND_REJECTED_RELEASE_DELAY_MS + 60_000,
+      );
+      expect(released.status).toBe("CANCELLED");
+
+      // The settled payment is free to be paid out again (claim, auto-heal or
+      // recovery), after the backoff.
+      const settlements = await db.all<{ settled: number; claimed: number; channelOpenAttemptId: string | null }[]>(
+        "SELECT settled, claimed, channelOpenAttemptId FROM htlcSettlement WHERE channelId = ?",
+        registration.fakeChannelId,
+      );
+      expect(settlements.length).toBeGreaterThan(0);
+      expect(settlements.every((row) => row.settled === 1 && row.claimed === 0)).toBe(true);
+      expect(settlements.every((row) => row.channelOpenAttemptId === null)).toBe(true);
+      await expect(
+        openChannelForSettledHtlcs({
+          db,
+          lightning: {} as any,
+          pubkey: walletPubkey,
+          source: "CLAIM",
+          zeroConf: false,
+          taprootChannel: true,
+        }),
+      ).resolves.toMatchObject({ status: "BACKOFF" });
+    } finally {
+      acceptor.acceptFrom(lspPubkey);
+      // Test data only: drop this request and the failed attempt so the next
+      // run doesn't start in the backoff or pay this request out.
+      await db.run("DELETE FROM htlcSettlement WHERE channelId = ?", registration.fakeChannelId);
+      await db.run(
+        "UPDATE channelRequest SET status = 'DONE', automaticOpenQueued = 0 WHERE channelId = ?",
+        registration.fakeChannelId,
+      );
+      await db.run("DELETE FROM channelOpenAttempt WHERE pubkey = ? AND status = 'CANCELLED'", walletPubkey);
+    }
   });
 
   test("the interceptor stream never dropped during the run", () => {

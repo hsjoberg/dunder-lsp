@@ -240,7 +240,9 @@ npm run regtest -- lncli lsp listchannels
 The scenarios cover: a single-part and a multi-part payment paid out in a new
 channel, a probe with a wrong payment hash (fails, interceptor stays up), a
 payment above the registered amount (`unknown_next_peer`), a payment while the
-wallet is offline, and the legacy signature format. Requires Docker; gRPC ports
+wallet is offline, the legacy signature format, and a payout channel the wallet
+rejects (Dunder records lnd's error and releases the payout after a minute for a
+later claim). The wallet runs a Blixt-like channel acceptor. Requires Docker; gRPC ports
 20009-20011 are bound to localhost.
 
 Note: after a payment fails at Dunder's hop, the payer's lnd avoids that route

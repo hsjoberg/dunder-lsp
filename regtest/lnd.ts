@@ -189,6 +189,48 @@ export function sendPayment(
   });
 }
 
+/**
+ * A channel acceptor like Blixt's: refuse legacy commitment types and
+ * zero-conf channels, accept anchor and taproot channels. `rejectFrom` makes it
+ * refuse every channel from a peer (to simulate a wallet rejecting the open).
+ */
+export function runChannelAcceptor(lightning: Client) {
+  const rejectedPeers = new Set<string>();
+  const stream = lightning.makeBidiStreamRequest(
+    "/lnrpc.Lightning/ChannelAcceptor",
+    (arg: any) => arg,
+    (arg: any) => arg,
+    new Metadata(),
+    undefined,
+  );
+  stream.on("data", (data: Uint8Array) => {
+    const request = lnrpc.ChannelAcceptRequest.decode(data);
+    const peer = Buffer.from(request.nodePubkey).toString("hex");
+    const legacy =
+      request.commitmentType === lnrpc.CommitmentType.LEGACY ||
+      request.commitmentType === lnrpc.CommitmentType.STATIC_REMOTE_KEY ||
+      request.commitmentType === lnrpc.CommitmentType.UNKNOWN_COMMITMENT_TYPE;
+    const reject = rejectedPeers.has(peer) || legacy || request.wantsZeroConf;
+    stream.write(
+      lnrpc.ChannelAcceptResponse.encode({
+        accept: !reject,
+        pendingChanId: request.pendingChanId,
+        error: reject ? "Channel rejected by the regtest wallet" : "",
+      }).finish(),
+    );
+  });
+  stream.on("error", (error: any) => {
+    if (error?.code !== 1) {
+      console.error("Channel acceptor stream error", error);
+    }
+  });
+  return {
+    rejectFrom: (pubkey: string) => rejectedPeers.add(pubkey),
+    acceptFrom: (pubkey: string) => rejectedPeers.delete(pubkey),
+    stop: () => stream.cancel(),
+  };
+}
+
 const COMPOSE_FILE = path.join(__dirname, "docker-compose.yml");
 
 /** Mines blocks on the regtest bitcoind. */
