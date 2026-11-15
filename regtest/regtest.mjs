@@ -103,17 +103,36 @@ async function waitSynced(nodes = NODES) {
   }
 }
 
+// Copies of each node's TLS certificate and admin macaroon on the host. lnd's
+// own data stays in a Docker volume (bbolt corrupts on Windows bind mounts).
 function nodePaths(node) {
   const lndDir = join(DATA_DIR, node);
   return {
     cert: join(lndDir, "tls.cert"),
-    macaroon: join(lndDir, "data", "chain", "bitcoin", "regtest", "admin.macaroon"),
+    macaroon: join(lndDir, "admin.macaroon"),
   };
 }
 
-// gRPC targets use "localhost", not 127.0.0.1: with @grpc/grpc-js 1.9 the
-// target host becomes the TLS server name, and Node 25 rejects IP addresses
-// there. lnd's certificate includes localhost (--tlsextradomain).
+const CONTAINER_FILES = {
+  cert: "/root/.lnd/tls.cert",
+  macaroon: "/root/.lnd/data/chain/bitcoin/regtest/admin.macaroon",
+};
+
+function copyCredentials(node) {
+  const paths = nodePaths(node);
+  for (const key of ["cert", "macaroon"]) {
+    const result = compose(["cp", `${node}:${CONTAINER_FILES[key]}`, paths[key]], {
+      allowFailure: true,
+    });
+    if (result.status !== 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// gRPC targets use 127.0.0.1, like most production configs; Dunder handles
+// IP targets on Node 25 (see grpcChannelOptionsFor in src/utils/grpc.ts).
 function writeDunderConfig(lspPubkey) {
   mkdirSync(DUNDER_CONFIG_DIR, { recursive: true });
   const { cert, macaroon } = nodePaths("lsp");
@@ -130,7 +149,7 @@ function writeDunderConfig(lspPubkey) {
     backendConfig: {
       // Address other nodes on the docker network use to reach the LSP.
       lndNode: "lsp:9735",
-      grpcServer: `localhost:${GRPC_PORTS.lsp}`,
+      grpcServer: `127.0.0.1:${GRPC_PORTS.lsp}`,
       cert,
       adminMacaroon: macaroon,
     },
@@ -145,7 +164,7 @@ function writeDunderConfig(lspPubkey) {
     regtest: {
       lspPubkey,
       nodes: Object.fromEntries(
-        NODES.map((node) => [node, { grpcServer: `localhost:${GRPC_PORTS[node]}`, ...nodePaths(node) }]),
+        NODES.map((node) => [node, { grpcServer: `127.0.0.1:${GRPC_PORTS[node]}`, ...nodePaths(node) }]),
       ),
     },
   };
@@ -178,9 +197,7 @@ async function up() {
   console.log("Waiting for lnd nodes...");
   for (const node of NODES) {
     await waitFor(`${node} lnd`, () => getInfo(node)?.identity_pubkey, { timeoutMs: 180_000 });
-    await waitFor(`${node} TLS cert and macaroon`, () =>
-      Object.values(nodePaths(node)).every((path) => existsSync(path)),
-    );
+    await waitFor(`${node} TLS cert and macaroon`, () => copyCredentials(node));
   }
   await waitSynced();
 

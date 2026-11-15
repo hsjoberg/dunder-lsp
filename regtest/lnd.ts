@@ -7,7 +7,7 @@ import config from "config";
 import Long from "long";
 
 import { lnrpc, routerrpc } from "../src/proto";
-import { GRPC_CHANNEL_OPTIONS } from "../src/utils/grpc";
+import { grpcChannelOptionsFor } from "../src/utils/grpc";
 
 export type RegtestNode = "lsp" | "wallet" | "payer";
 
@@ -32,9 +32,10 @@ export function createClients(node: RegtestNode): ILndClients {
     credentials.createSsl(fs.readFileSync(cert)),
     macaroonCreds,
   );
+  const options = grpcChannelOptionsFor(grpcServer);
   return {
-    lightning: new Client(grpcServer, creds, GRPC_CHANNEL_OPTIONS),
-    router: new Client(grpcServer, creds, GRPC_CHANNEL_OPTIONS),
+    lightning: new Client(grpcServer, creds, options),
+    router: new Client(grpcServer, creds, options),
   };
 }
 

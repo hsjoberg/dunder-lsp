@@ -3,8 +3,9 @@
 #   payer --(public channel)--> lsp --(Dunder opens on demand)--> wallet
 #
 # lsp is Dunder's node, wallet stands in for a Blixt wallet, payer pays
-# invoices. lnd data directories are bind-mounted under regtest/.data so the
-# host can read TLS certificates and macaroons. gRPC ports are bound to
+# invoices. lnd data lives in Docker volumes: bbolt databases get corrupted on
+# bind mounts from a Windows folder. regtest.mjs copies each node's TLS
+# certificate and admin macaroon to regtest/.data. gRPC ports are bound to
 # 127.0.0.1 only. Protocol flags match Blixt's lnd.conf. Dunder runs with
 # zero-conf channels off, as in production, so payouts confirm on-chain.
 
@@ -56,7 +57,7 @@ services:
       - --protocol.simple-taproot-chans
       - --maxpendingchannels=10
     volumes:
-      - ./.data/lsp:/root/.lnd
+      - lsp:/root/.lnd
     ports:
       - "127.0.0.1:20009:10009"
 
@@ -81,7 +82,7 @@ services:
       - --protocol.simple-taproot-chans
       - --maxpendingchannels=10
     volumes:
-      - ./.data/wallet:/root/.lnd
+      - wallet:/root/.lnd
     ports:
       - "127.0.0.1:20010:10009"
 
@@ -106,6 +107,11 @@ services:
       - --protocol.simple-taproot-chans
       - --maxpendingchannels=10
     volumes:
-      - ./.data/payer:/root/.lnd
+      - payer:/root/.lnd
     ports:
       - "127.0.0.1:20011:10009"
+
+volumes:
+  lsp:
+  wallet:
+  payer:
