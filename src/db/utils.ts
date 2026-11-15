@@ -66,8 +66,11 @@ export function sqlFixFilterSortRange(
           }
         });
         sql.append(") ");
+      } else if (Array.isArray(value)) {
+        // An empty list matches nothing.
+        sql.append(" IN (NULL) ");
       } else {
-        sql.append(SQL`LIKE ${"%" + f[i][1] + "%"} `);
+        sql.append(SQL` LIKE ${"%" + value + "%"} `);
       }
 
       if (i !== f.length - 1) {

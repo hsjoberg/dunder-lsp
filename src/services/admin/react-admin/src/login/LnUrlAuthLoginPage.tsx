@@ -16,14 +16,24 @@ const LnUrlAuthLoginPage: React.FunctionComponent = ({ theme }: any) => {
 
       const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
       ws = new WebSocket(`${wsProtocol}://${window.location.host}/admin/api/login-ws`);
-      ws.onmessage = (event) => {
+      ws.onmessage = async (event) => {
         const response = JSON.parse(event.data);
         if (response.lnurlAuth) {
           console.log(event.data);
           setBech32(response.lnurlAuth);
         } else if (response.status) {
           if (response.status === "OK") {
-            login({ username: "username", password: "password" });
+            // The wallet approved the login. Complete it from the browser so
+            // the server can issue a fresh session cookie.
+            const completion = await fetch("/admin/api/login-complete", {
+              method: "POST",
+              credentials: "include",
+            });
+            if (completion.ok) {
+              login({ username: "username", password: "password" });
+            } else {
+              console.error("Could not complete login", await completion.text());
+            }
           }
         }
       };
