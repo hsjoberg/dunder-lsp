@@ -62,20 +62,33 @@ The `master` branch always expects the latest version of lnd. Lnd compiled with 
 
 ### lnd settings
 
-Add these to `lnd.conf`:
+`store-final-htlc-resolutions` belongs in the `[Application Options]` section
+of `lnd.conf`, the top section that holds most of lnd's general options (it is
+in the same place in lnd's `sample-lnd.conf`). Add it under the existing
+section header rather than a second one, then restart lnd:
+
+```ini
+[Application Options]
+; ...your existing options...
+
+; Lets Dunder recover the outcome of an HTLC whose settle event it missed
+; (Dunder restart, stream reconnect). Without it such payments must be
+; checked by hand.
+store-final-htlc-resolutions=true
+```
+
+lnd only stores outcomes from the moment this is on; older HTLCs can't be
+looked up.
+
+Optional, in the `[routerrpc]` section:
 
 ```ini
 [routerrpc]
-# Optional. While Dunder is disconnected, fail new forwards instead of
-# forwarding them unchecked, and keep HTLCs Dunder was holding so they are
-# replayed when it reconnects (fewer failed on-demand payments across Dunder
-# restarts). Cost: the node routes nothing while Dunder is down.
-# routerrpc.requireinterceptor=true
-
-[Application Options]
-# Lets Dunder recover the outcome of an HTLC whose settle event it missed
-# (restart, stream reconnect).
-store-final-htlc-resolutions=true
+; While Dunder is disconnected, fail new forwards instead of forwarding them
+; unchecked, and keep HTLCs Dunder was holding so they are replayed when it
+; reconnects (fewer failed on-demand payments across Dunder restarts).
+; Cost: the node routes nothing while Dunder is down.
+routerrpc.requireinterceptor=true
 ```
 
 ### Restricted macaroon
@@ -101,14 +114,51 @@ lncli bakemacaroon --save_to dunder.macaroon \
   uri:/routerrpc.Router/SubscribeHtlcEvents
 ```
 
-### HTTPS and the admin interface
+### Reverse proxy (HTTPS)
 
 Dunder serves plain HTTP; put it behind a reverse proxy that terminates TLS.
-When `serverDomain` starts with `https://`, the admin session cookie is marked
-`Secure` and is only set when the proxy sends `X-Forwarded-Proto: https`
-(Caddy does this by default; nginx needs
-`proxy_set_header X-Forwarded-Proto $scheme;`). Without that header admin login
-fails.
+Two things depend on the proxy:
+
+- **Admin login.** When `serverDomain` starts with `https://`, the admin session
+  cookie is marked `Secure` and is only set when the request arrived over HTTPS,
+  which Dunder learns from the proxy's `X-Forwarded-Proto: https` header.
+  Without it, admin login silently fails.
+- **Per-IP rate limit.** Every request reaches Dunder from the proxy, so Dunder
+  sees the proxy's address as the client. `trustProxy` tells Dunder which
+  addresses are your proxy; for requests from those, it takes the real client
+  address from the `X-Forwarded-For` header instead. Without it, all clients
+  share one limit (`ipRateLimitPerMinute`), and a busy or abusive client blocks
+  everyone. Requests from other addresses are never trusted, so clients can't
+  pick their own address with a forged header.
+
+**Caddy** sends both headers by default (`X-Forwarded-Proto`, and
+`X-Forwarded-For` with the real client address, ignoring any value the client
+sent), and proxies the admin WebSocket without extra configuration:
+
+```caddyfile
+dunder.example.com {
+	reverse_proxy 127.0.0.1:8080
+}
+```
+
+With Caddy on the same machine, set in Dunder's config:
+
+```json
+"serverDomain": "https://dunder.example.com",
+"serverHost": "127.0.0.1:8080",
+"trustProxy": "loopback"
+```
+
+`loopback` trusts 127.0.0.1 and ::1 (Caddy may connect over either). If the
+proxy runs elsewhere, list its address instead (`"trustProxy": "10.0.0.5"`).
+Binding `serverHost` to 127.0.0.1 keeps Dunder reachable only through the proxy.
+`serverDomain` must be the address wallets use: Blixt signs requests for that
+host and Dunder rejects requests signed for another.
+
+**nginx** doesn't send these by default; add
+`proxy_set_header X-Forwarded-Proto $scheme;` and
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`, plus the usual
+WebSocket upgrade headers for `/admin/api/login-ws`.
 
 ### Configuration
 
@@ -119,7 +169,7 @@ fails.
 | `maxOpenRequestsPerPubkey` | 5 | Unpaid, unexpired requests a wallet may have at once. |
 | `signedRequestRateLimitPerMinute` | 30 | Signed wallet requests accepted per pubkey per minute. |
 | `ipRateLimitPerMinute` | 120 | Requests to the public API (`/ondemand-channel/*`, `/getInfo`, `/estimateFee`) per client IP per minute. `0` turns it off. |
-| `trustProxy` | `false` | Fastify `trustProxy`: which reverse proxies to trust for `X-Forwarded-For`, e.g. `"127.0.0.1"`. **Set this when running behind a proxy**, otherwise every client has the proxy's address and shares one rate limit. |
+| `trustProxy` | `false` | Addresses of your reverse proxy, whose `X-Forwarded-For` gives the real client address (e.g. `"loopback"`, `"10.0.0.5"`, a hop count, or `true` for any). **Set this when running behind a proxy**; see "Reverse proxy (HTTPS)". |
 
 ### Signed wallet requests
 
