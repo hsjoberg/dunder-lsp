@@ -21,7 +21,12 @@ import {
 } from "../../../../src/services/ondemand-channel/channel-open";
 import { bytesToHexString, sha256Buffer, timeout } from "../../../../src/utils/common";
 import { checkPeerConnected, openChannelSync } from "../../../../mocks/utils/lnd-api";
-import { createForwardHtlcInterceptRequest, sendRegisterRequest } from "./register-helpers";
+import {
+  createForwardHtlcInterceptRequest,
+  createPreimage,
+  sendRegisterRequest,
+} from "./register-helpers";
+import { createOnDemandChannelHtlcHandler } from "../../../../src/services/ondemand-channel/api/register";
 
 const PUBKEY = "abcdef12345";
 
@@ -39,8 +44,8 @@ async function createSettledRequest(channelId: string) {
   });
   await createHtlcSettlement(db, {
     channelId,
-    incomingChannelId: 1,
-    htlcId: 1,
+    incomingChannelId: "1",
+    htlcId: "1",
     amountSat: 5000,
     settled: 1,
     claimed: 0,
@@ -66,7 +71,7 @@ describe("channelOpeningEnabled = false", () => {
 
     const response = await sendRegisterRequest(app, {
       amountSat: 20000,
-      preimage: bytesToHexString(new Uint8Array([1])),
+      preimage: bytesToHexString(createPreimage(1)),
       pubkey: PUBKEY,
       signature: "validsig",
     });
@@ -111,7 +116,7 @@ describe("channelOpeningEnabled = false", () => {
     enabledSpy.mockReturnValue(true);
     const app = build();
     const amountSat = 20000;
-    const preimage = new Uint8Array([7]);
+    const preimage = createPreimage(7);
     const incomingChanId = Long.fromValue(77);
     const htlcPart = Long.fromValue(1);
 
@@ -156,6 +161,53 @@ describe("channelOpeningEnabled = false", () => {
     await app.close();
   });
 
+  test("still settles an HTLC that was recorded for settlement before it was disabled", async () => {
+    // Failing it could leave a payment partly settled: its other parts may
+    // already be settled.
+    const db = await getDb(true);
+    const preimage = createPreimage(9);
+    await createChannelRequest(db, {
+      channelId: "4242",
+      pubkey: PUBKEY,
+      preimage: bytesToHexString(preimage),
+      status: "REGISTERED",
+      start: Math.floor(Date.now() / 1000),
+      expire: 600,
+      expectedAmountSat: 20000,
+      channelPoint: null,
+    });
+    await createHtlcSettlement(db, {
+      channelId: "4242",
+      incomingChannelId: "99",
+      htlcId: "3",
+      amountSat: 20000,
+      settled: 0,
+      claimed: 0,
+    });
+    const actions: routerrpc.ResolveHoldForwardAction[] = [];
+    const handler = createOnDemandChannelHtlcHandler(db, {} as any);
+
+    await handler(
+      routerrpc.ForwardHtlcInterceptRequest.decode(
+        createForwardHtlcInterceptRequest(
+          20000,
+          "4242",
+          sha256Buffer(preimage),
+          Long.fromValue(99),
+          Long.fromValue(3),
+        ),
+      ),
+      {
+        responded: false,
+        respond: (action) => {
+          actions.push(action);
+        },
+      },
+    );
+
+    expect(actions).toEqual([routerrpc.ResolveHoldForwardAction.SETTLE]);
+  });
+
   test("does not open a channel for settled HTLCs", async () => {
     const db = await createSettledRequest("disabled-open-channel");
 
@@ -165,7 +217,6 @@ describe("channelOpeningEnabled = false", () => {
         lightning: {} as any,
         pubkey: PUBKEY,
         source: "CLAIM",
-        spendUnconfirmed: true,
         zeroConf: false,
         taprootChannel: false,
       }),
