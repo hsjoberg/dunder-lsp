@@ -169,6 +169,7 @@ WebSocket upgrade headers for `/admin/api/login-ws`.
 | `maxOpenRequestsPerPubkey` | 5 | Unpaid, unexpired requests a wallet may have at once. |
 | `signedRequestRateLimitPerMinute` | 30 | Signed wallet requests accepted per pubkey per minute. |
 | `ipRateLimitPerMinute` | 120 | Requests to the public API (`/ondemand-channel/*`, `/getInfo`, `/estimateFee`) per client IP per minute. `0` turns it off. |
+| `backendConfig.tlsServerName` | `localhost` | Only used when `backendConfig.grpcServer` is an IP address: the TLS server name sent to lnd (Node 25 refuses IP addresses there). lnd's generated certificates always include `localhost`; set this only for a custom certificate. |
 | `trustProxy` | `false` | Addresses of your reverse proxy, whose `X-Forwarded-For` gives the real client address (e.g. `"loopback"`, `"10.0.0.5"`, a hop count, or `true` for any). **Set this when running behind a proxy**; see "Reverse proxy (HTTPS)". |
 
 ### Signed wallet requests
