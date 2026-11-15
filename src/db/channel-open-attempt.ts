@@ -7,6 +7,12 @@ import { IChannelRequestDB, IHtlcSettlementDB } from "./ondemand-channel";
 
 export type ChannelOpenAttemptSource = "AUTOMATIC" | "CLAIM" | "AUTO_HEAL";
 export type ChannelOpenAttemptStatus = "OPENING" | "UNKNOWN" | "OPENED" | "CANCELLED";
+/**
+ * How a dispatched OpenChannelSync failed. LND_REJECTED: lnd answered with an
+ * error of its own, so nothing was funded. AMBIGUOUS: transport error or no
+ * answer, so lnd may still be funding the channel.
+ */
+export type ChannelOpenFailureKind = "LND_REJECTED" | "AMBIGUOUS";
 
 export interface IChannelOpenAttemptDB {
   attemptId: string;
@@ -25,6 +31,8 @@ export interface IChannelOpenAttemptDB {
   taprootChannel: number;
   rpcDispatched: number;
   dispatchCount: number;
+  failureKind?: ChannelOpenFailureKind | null;
+  existingClosedChannelPoints?: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -38,7 +46,7 @@ type ReservationOptions = {
   maximumAmountSat: number;
   feeSat: number;
   existingChannelPoints: string[];
-  spendUnconfirmed: boolean;
+  existingClosedChannelPoints: string[];
   zeroConf: boolean;
   taprootChannel: boolean;
 };
@@ -148,27 +156,19 @@ export async function reserveChannelOpenAttempt(
          AND htlcSettlement.claimed = 0
          AND htlcSettlement.channelOpenAttemptId IS NULL
          AND ($channelId IS NULL OR htlcSettlement.channelId = $channelId)
+         -- A request is final once none of its parts await lnd's settle
+         -- confirmation. All parts are recorded in one transaction before
+         -- any SETTLE, rows are only ever removed afterwards (when lnd failed
+         -- that part), and a request with rows accepts no new parts. So a
+         -- request may be paid out short: lnd failed some of its parts after
+         -- others settled. Automatic opens still require the full amount via
+         -- requiredAmountSat; claim and auto-heal pay out what arrived.
          AND NOT EXISTS (
            SELECT 1
            FROM htlcSettlement AS unsettled
            WHERE unsettled.channelId = channelRequest.channelId
              AND unsettled.settled = 0
          )
-         AND (
-           SELECT COALESCE(
-             SUM(
-               CAST(
-                 COALESCE(
-                   requestSettlement.amountMsat,
-                   CAST(requestSettlement.amountSat * 1000 AS TEXT)
-                 ) AS INTEGER
-               )
-             ),
-             0
-           )
-           FROM htlcSettlement AS requestSettlement
-           WHERE requestSettlement.channelId = channelRequest.channelId
-         ) = channelRequest.expectedAmountSat * 1000
        ORDER BY htlcSettlement.channelId,
                 htlcSettlement.incomingChannelId,
                 htlcSettlement.htlcId`,
@@ -193,9 +193,8 @@ export async function reserveChannelOpenAttempt(
     const selected: IHtlcSettlementDB[] = [];
     let totalMsat = Long.UZERO;
 
-    // Every selected request is complete, but a claim may still combine
-    // several requests. Keep each request's remaining unclaimed shards
-    // together when applying the configured channel limit.
+    // A claim may combine several requests. Keep each request's remaining
+    // unclaimed shards together when applying the configured channel limit.
     for (const channelSettlements of settlementsByChannel.values()) {
       const channelAmountMsat = channelSettlements.reduce((amount, settlement) => {
         return amount.add(
@@ -247,6 +246,7 @@ export async function reserveChannelOpenAttempt(
          feeSat,
          pushAmountSat,
          existingChannelPoints,
+         existingClosedChannelPoints,
          channelPoint,
          error,
          spendUnconfirmed,
@@ -268,6 +268,7 @@ export async function reserveChannelOpenAttempt(
          $feeSat,
          $pushAmountSat,
          $existingChannelPoints,
+         $existingClosedChannelPoints,
          NULL,
          NULL,
          $spendUnconfirmed,
@@ -287,7 +288,9 @@ export async function reserveChannelOpenAttempt(
         $feeSat: options.feeSat,
         $pushAmountSat: pushAmountSat,
         $existingChannelPoints: JSON.stringify(options.existingChannelPoints),
-        $spendUnconfirmed: options.spendUnconfirmed ? 1 : 0,
+        $existingClosedChannelPoints: JSON.stringify(options.existingClosedChannelPoints),
+        // Kept for older rows. Payouts never spend unconfirmed UTXOs.
+        $spendUnconfirmed: 0,
         $zeroConf: options.zeroConf ? 1 : 0,
         $taprootChannel: options.taprootChannel ? 1 : 0,
         $createdAt: now,
@@ -443,18 +446,36 @@ export async function markChannelOpenAttemptUnknown(
   db: Database,
   attemptId: string,
   error: string,
+  failureKind: ChannelOpenFailureKind = "AMBIGUOUS",
 ) {
   await db.run(
     `UPDATE channelOpenAttempt
-     SET status = 'UNKNOWN', error = $error, updatedAt = $updatedAt
+     SET status = 'UNKNOWN', error = $error, failureKind = $failureKind, updatedAt = $updatedAt
      WHERE attemptId = $attemptId
        AND status IN ('OPENING', 'UNKNOWN')
        AND rpcDispatched = 1`,
     {
       $attemptId: attemptId,
       $error: error.slice(0, 2000),
+      $failureKind: failureKind,
       $updatedAt: Date.now(),
     },
+  );
+}
+
+/**
+ * Dispatched attempts for a pubkey that were released after lnd failed to open
+ * the channel, newest first. Used to back off before trying again.
+ */
+export function getRecentFailedChannelOpenAttempts(db: Database, pubkey: string, since: number) {
+  return db.all<IChannelOpenAttemptDB[]>(
+    `SELECT * FROM channelOpenAttempt
+     WHERE pubkey = $pubkey
+       AND status = 'CANCELLED'
+       AND failureKind IS NOT NULL
+       AND updatedAt >= $since
+     ORDER BY updatedAt DESC`,
+    { $pubkey: pubkey, $since: since },
   );
 }
 

@@ -6,7 +6,7 @@ import { routerrpc } from "../../../../src/proto";
 import { IRegisterOkResponse } from "../../../../src/services/ondemand-channel/api/register";
 import build from "../../../../src/app";
 import { bytesToHexString, sha256Buffer, timeout } from "../../../../src/utils/common";
-import { createForwardHtlcInterceptRequest, sendRegisterRequest } from "./register-helpers";
+import { createForwardHtlcInterceptRequest, sendRegisterRequest, createPreimage } from "./register-helpers";
 
 // Mocked functions
 import { openChannelSync } from "../../../../mocks/utils/lnd-api";
@@ -23,7 +23,7 @@ describe("/ondemand-channel/register", () => {
     const amountSat = 51;
     const firstPartSat = 46;
     const secondPartSat = 5;
-    const preimage = new Uint8Array([0]);
+    const preimage = createPreimage(0);
     const paymentHash = sha256Buffer(preimage);
     const pubkey = "abcdef12345";
     const signature = "validsig";

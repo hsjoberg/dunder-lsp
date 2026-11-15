@@ -2,7 +2,7 @@
   "env": "test",
   "serverHost": "127.0.0.1:8089",
   "serverDomain": "https://domain.com",
-  "htlcWaitMs": 10,
+  "htlcWaitSeconds": 5,
   "minimumPaymentMultiplier": 5,
   "maximumPaymentSat": 1000000,
   "fee": {
@@ -19,5 +19,9 @@
   },
   "allowZeroConfChannels": true,
   "allowTaprootChannels": true,
-  "rejectPublicPublicHtlcForwards": false
+  "rejectPublicPublicHtlcForwards": false,
+  "allowLegacySignatures": true,
+  "maxOpenRequestsPerPubkey": 100,
+  "signedRequestRateLimitPerMinute": 10000,
+  "ipRateLimitPerMinute": 10000
 }

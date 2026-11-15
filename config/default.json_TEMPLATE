@@ -2,7 +2,7 @@
   "env": "development",
   "serverHost": "0.0.0.0:8080",
   "serverDomain": "https://domain.com",
-  "htlcWaitMs": 50,
+  "htlcWaitSeconds": 50,
   "minimumPaymentMultiplier": 5,
   "maximumPaymentSat": 1000000,
   "fee": {
@@ -20,5 +20,10 @@
   "channelOpeningEnabled": true,
   "allowZeroConfChannels": true,
   "allowTaprootChannels": true,
-  "rejectPublicPublicHtlcForwards": false
+  "rejectPublicPublicHtlcForwards": false,
+  "allowLegacySignatures": true,
+  "maxOpenRequestsPerPubkey": 5,
+  "signedRequestRateLimitPerMinute": 30,
+  "ipRateLimitPerMinute": 120,
+  "trustProxy": false
 }

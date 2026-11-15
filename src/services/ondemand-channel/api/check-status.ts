@@ -1,7 +1,6 @@
 import { Client } from "@grpc/grpc-js";
 import { RouteHandlerMethod } from "fastify";
 
-import { verifyMessage } from "../../../utils/lnd-api";
 import {
   ChannelRequestStatus,
   getActiveChannelRequestsByPubkey,
@@ -9,6 +8,7 @@ import {
 } from "../../../db/ondemand-channel";
 import { IErrorResponse } from "../index";
 import { Database } from "sqlite";
+import { parseSignedEnvelope, verifySignedEnvelope } from "./signed-request";
 
 export interface ICheckStatusRequest {
   pubkey: string;
@@ -22,23 +22,23 @@ export interface ICheckStatusResponse {
 
 export default function CheckStatus(db: Database, lightning: Client): RouteHandlerMethod {
   return async (request, reply) => {
-    const checkStatusRequest = JSON.parse(request.body as string) as ICheckStatusRequest;
-
-    const verifyMessageResponse = await verifyMessage(
-      lightning,
+    const envelope = parseSignedEnvelope(
+      request.body,
+      "/ondemand-channel/check-status",
       "CHECKSTATUS",
-      checkStatusRequest.signature,
     );
-    if (checkStatusRequest.pubkey !== verifyMessageResponse.pubkey) {
+    if (!envelope.ok) {
       reply.code(400);
-      const error: IErrorResponse = {
-        status: "ERROR",
-        reason:
-          "The Public key provided doesn't match with the public key extracted from the signature. " +
-          "Either the signature is wrong or you have signed with the wrong wallet.",
-      };
+      const error: IErrorResponse = { status: "ERROR", reason: envelope.reason };
       return error;
     }
+    const verified = await verifySignedEnvelope(lightning, envelope.value);
+    if (!verified.ok) {
+      reply.code(verified.statusCode ?? 400);
+      const error: IErrorResponse = { status: "ERROR", reason: verified.reason };
+      return error;
+    }
+    const checkStatusRequest = { pubkey: verified.value };
 
     const channelRequests = await getActiveChannelRequestsByPubkey(db, checkStatusRequest.pubkey);
     const unclaimed = await getChannelRequestUnclaimedAmount(db, checkStatusRequest.pubkey);

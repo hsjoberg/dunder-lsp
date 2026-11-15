@@ -6,9 +6,12 @@ import { DuplexMock, BufferWritableMock } from "stream-mock";
 import { lnrpc } from "../../src/proto";
 import { stringToUint8Array } from "../../src/utils/common";
 
+export const __MOCK_BLOCK_HEIGHT = 800_000;
+
 export async function getInfo(lightning: Client) {
   const getInfoResponse = lnrpc.GetInfoResponse.create({
     identityPubkey: "abc",
+    blockHeight: __MOCK_BLOCK_HEIGHT,
   });
   return getInfoResponse;
 }
@@ -100,3 +103,21 @@ export const checkPeerConnected = jest.fn(() => {
 export function subscribePeerEvents(lightning: Client) {
   return new Stream();
 }
+
+export const walletBalance = jest.fn(async () =>
+  lnrpc.WalletBalanceResponse.create({
+    totalBalance: Long.fromValue(100_000_000),
+    confirmedBalance: Long.fromValue(100_000_000),
+  }),
+);
+
+export const closedChannels = jest.fn(async () =>
+  lnrpc.ClosedChannelsResponse.create({ channels: [] }),
+);
+
+/** Default: lnd has no final resolution stored (gRPC NOT_FOUND). */
+export const lookupHtlcResolution = jest.fn(async (): Promise<lnrpc.LookupHtlcResolutionResponse> => {
+  const error: any = new Error("5 NOT_FOUND: htlc unknown");
+  error.code = 5;
+  throw error;
+});

@@ -4,14 +4,15 @@ import { RouteHandlerMethod } from "fastify";
 import { Database } from "sqlite";
 
 import { getChannelRequestUnclaimedAmount } from "../../../db/ondemand-channel";
-import { checkPeerConnected, verifyMessage } from "../../../utils/lnd-api";
+import { checkPeerConnected } from "../../../utils/lnd-api";
 import { openChannelForSettledHtlcs } from "../channel-open";
 import { IErrorResponse } from "../index";
+import { parseSignedEnvelope, verifySignedEnvelope } from "./signed-request";
 import { isChannelOpeningEnabled } from "./utils";
 
 export interface IClaimRequest {
   pubkey: string;
-  signature: string; // Message has to be CLAIM base64
+  signature: string; // Legacy scheme: the message is "CLAIM". See signed-request.ts.
 }
 
 export interface IClaimResponse {
@@ -30,22 +31,22 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
       return error;
     }
 
-    const claimRequest = JSON.parse(request.body as string) as IClaimRequest;
+    const envelope = parseSignedEnvelope(request.body, "/ondemand-channel/claim", "CLAIM");
+    if (!envelope.ok) {
+      reply.code(400);
+      const error: IErrorResponse = { status: "ERROR", reason: envelope.reason };
+      return error;
+    }
     const allowZeroConfChannels = config.get<boolean>("allowZeroConfChannels") || false;
     const allowTaprootChannels = config.get<boolean>("allowTaprootChannels") || false;
 
-    // Verify that the message is valid
-    const verifyMessageResponse = await verifyMessage(lightning, "CLAIM", claimRequest.signature);
-    if (claimRequest.pubkey !== verifyMessageResponse.pubkey) {
-      reply.code(400);
-      const error: IErrorResponse = {
-        status: "ERROR",
-        reason:
-          "The Public key provided doesn't match with the public key extracted from the signature. " +
-          "Either the signature is wrong or you have signed with the wrong wallet.",
-      };
+    const verified = await verifySignedEnvelope(lightning, envelope.value);
+    if (!verified.ok) {
+      reply.code(verified.statusCode ?? 400);
+      const error: IErrorResponse = { status: "ERROR", reason: verified.reason };
       return error;
     }
+    const claimRequest = { pubkey: verified.value };
 
     // Check if the requester is connected to our Lightning node
     if (!(await checkPeerConnected(lightning, claimRequest.pubkey))) {
@@ -72,7 +73,6 @@ export default function Claim(db: Database, lightning: Client): RouteHandlerMeth
         lightning,
         pubkey: claimRequest.pubkey,
         source: "CLAIM",
-        spendUnconfirmed: true,
         zeroConf: allowZeroConfChannels,
         taprootChannel: allowTaprootChannels,
       });

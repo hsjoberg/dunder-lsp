@@ -9,7 +9,11 @@ import AutoHeal from "./api/misc/auto-heal";
 import Claim from "./api/claim";
 import getDb from "../../db/db";
 import { startHtlcInterceptor } from "../htlc-interceptor";
-import { createOnDemandChannelHtlcHandler } from "./api/register";
+import {
+  createOnDemandChannelHtlcHandler,
+  dropHeldPaymentsAfterStreamReset,
+  startHtlcSettlementTracking,
+} from "./api/register";
 import config from "config";
 import { startChannelOpenRecovery } from "./channel-open";
 
@@ -22,12 +26,17 @@ const OnDemandChannel = async function (app, { lightning, router }) {
   const db = await getDb();
   // Figure out the pubkey of our own node
   const servicePubKey = (await getInfo(lightning)).identityPubkey;
-  const unregisterHtlcHandler = startHtlcInterceptor(router).registerHandler(
+  const interceptor = startHtlcInterceptor(router);
+  const unregisterHtlcHandler = interceptor.registerHandler(
     createOnDemandChannelHtlcHandler(db, lightning),
   );
+  const unsubscribeStreamReset = interceptor.onStreamReset(dropHeldPaymentsAfterStreamReset);
+  const stopSettlementTracking = startHtlcSettlementTracking(db, lightning, router);
 
   app.addHook("onClose", async () => {
     unregisterHtlcHandler();
+    unsubscribeStreamReset();
+    stopSettlementTracking();
   });
 
   app.get("/service-status", ServiceStatus(lightning, servicePubKey));
@@ -35,7 +44,10 @@ const OnDemandChannel = async function (app, { lightning, router }) {
   app.post("/check-status", CheckStatus(db, lightning));
   app.post("/claim", Claim(db, lightning));
 
-  AutoHeal(db, lightning, router);
+  const stopAutoHeal = AutoHeal(db, lightning, router);
+  app.addHook("onClose", async () => {
+    stopAutoHeal();
+  });
 
   // Tests exercise recovery explicitly so their lnd mocks and timers remain
   // deterministic. A real service run reconciles immediately on startup and

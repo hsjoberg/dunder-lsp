@@ -58,6 +58,96 @@ The `master` branch always expects the latest version of lnd. Lnd compiled with 
 9. `npm run build`
 10. `npm start`
 
+## Running in production
+
+### lnd settings
+
+Add these to `lnd.conf`:
+
+```ini
+[routerrpc]
+# Optional. While Dunder is disconnected, fail new forwards instead of
+# forwarding them unchecked, and keep HTLCs Dunder was holding so they are
+# replayed when it reconnects (fewer failed on-demand payments across Dunder
+# restarts). Cost: the node routes nothing while Dunder is down.
+# routerrpc.requireinterceptor=true
+
+[Application Options]
+# Lets Dunder recover the outcome of an HTLC whose settle event it missed
+# (restart, stream reconnect).
+store-final-htlc-resolutions=true
+```
+
+### Restricted macaroon
+
+Dunder doesn't need lnd's `admin.macaroon`. Bake one limited to the RPCs it
+calls and point `backendConfig.adminMacaroon` at it:
+
+```sh
+lncli bakemacaroon --save_to dunder.macaroon \
+  uri:/lnrpc.Lightning/GetInfo \
+  uri:/lnrpc.Lightning/EstimateFee \
+  uri:/lnrpc.Lightning/NewAddress \
+  uri:/lnrpc.Lightning/WalletBalance \
+  uri:/lnrpc.Lightning/VerifyMessage \
+  uri:/lnrpc.Lightning/ListPeers \
+  uri:/lnrpc.Lightning/ListChannels \
+  uri:/lnrpc.Lightning/PendingChannels \
+  uri:/lnrpc.Lightning/ClosedChannels \
+  uri:/lnrpc.Lightning/LookupHtlcResolution \
+  uri:/lnrpc.Lightning/SubscribePeerEvents \
+  uri:/lnrpc.Lightning/OpenChannelSync \
+  uri:/routerrpc.Router/HtlcInterceptor \
+  uri:/routerrpc.Router/SubscribeHtlcEvents
+```
+
+### HTTPS and the admin interface
+
+Dunder serves plain HTTP; put it behind a reverse proxy that terminates TLS.
+When `serverDomain` starts with `https://`, the admin session cookie is marked
+`Secure` and is only set when the proxy sends `X-Forwarded-Proto: https`
+(Caddy does this by default; nginx needs
+`proxy_set_header X-Forwarded-Proto $scheme;`). Without that header admin login
+fails.
+
+### Configuration
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `htlcWaitSeconds` | 60 | How long the parts of a multi-part payment are held while waiting for the rest. Replaces `htlcWaitMs`, which was always read as seconds. |
+| `allowLegacySignatures` | `true` | Accept wallet requests signed with the old fixed words (`REGISTER`, `CLAIM`, `CHECKSTATUS`). Turn off once wallets use signed messages. |
+| `maxOpenRequestsPerPubkey` | 5 | Unpaid, unexpired requests a wallet may have at once. |
+| `signedRequestRateLimitPerMinute` | 30 | Signed wallet requests accepted per pubkey per minute. |
+| `ipRateLimitPerMinute` | 120 | Requests to the public API (`/ondemand-channel/*`, `/getInfo`, `/estimateFee`) per client IP per minute. `0` turns it off. |
+| `trustProxy` | `false` | Fastify `trustProxy`: which reverse proxies to trust for `X-Forwarded-For`, e.g. `"127.0.0.1"`. **Set this when running behind a proxy**, otherwise every client has the proxy's address and shares one rate limit. |
+
+### Signed wallet requests
+
+`/ondemand-channel/register`, `/claim` and `/check-status` take a body of
+
+```json
+{ "pubkey": "<hex, optional>", "message": "<signed JSON text>", "signature": "<lnd SignMessage signature>" }
+```
+
+where `message` is the exact JSON text that was signed:
+
+```json
+{
+  "endpoint": "/ondemand-channel/register",
+  "domain": "<host of Dunder's serverDomain>",
+  "timestamp": 1731628800,
+  "nonce": "<random string, 8-128 characters>",
+  "data": { "amountSat": 50000, "preimage": "<64 hex characters>" }
+}
+```
+
+Request fields are read from `data` (`claim` and `check-status` have none). A
+message is accepted within 30 seconds of its timestamp and only once.
+`domain` must match the host of Dunder's `serverDomain`, so wallets must reach
+Dunder under that name. `/ondemand-channel/service-status` returns
+`"requestSigningVersion": 2` so wallets know they can use this format. Version
+1, signing only a fixed word, is what older Dunder servers accept.
+
 # Admin interface
 
 <div>

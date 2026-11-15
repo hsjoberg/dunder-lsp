@@ -6,7 +6,7 @@ import { routerrpc } from "../../../../src/proto";
 import { IRegisterOkResponse } from "../../../../src/services/ondemand-channel/api/register";
 import build from "../../../../src/app";
 import { bytesToHexString, sha256Buffer, timeout } from "../../../../src/utils/common";
-import { createForwardHtlcInterceptRequest, sendRegisterRequest } from "./register-helpers";
+import { createForwardHtlcInterceptRequest, sendRegisterRequest, createPreimage } from "./register-helpers";
 
 jest.setTimeout(20 * 1000);
 
@@ -14,11 +14,11 @@ jest.setTimeout(20 * 1000);
 import { openChannelSync } from "../../../../mocks/utils/lnd-api";
 
 describe("/ondemand-channel/register", () => {
-  it("should fail HTLC that has a part that never arrived", async () => {
+  it("never fails a part after settling it, and waits for every settle event", async () => {
     const app = build();
 
     const amountSat = 20000;
-    const preimage = new Uint8Array([0]);
+    const preimage = createPreimage(0);
     const paymentHash = sha256Buffer(preimage);
     const pubkey = "abcdef12345";
     const signature = "validsig";
@@ -91,11 +91,14 @@ describe("/ondemand-channel/register", () => {
       expect(forwardHtlcInterceptResponse?.[0].action).toBe(
         routerrpc.ResolveHoldForwardAction.SETTLE,
       );
-      expect(forwardHtlcInterceptResponse?.[1].action).toBe(
-        routerrpc.ResolveHoldForwardAction.FAIL,
-      );
-      expect(openChannelSync).not.toBeCalled();
     }, 20 * 1000);
+
+    // Once SETTLE has been sent, the parts must never be failed as well: lnd
+    // drops the interceptor stream when a circuit is answered twice. The
+    // channel isn't opened until every part is confirmed settled.
+    await timeout(6000);
+    expect(forwardHtlcInterceptResponse).toHaveLength(1);
+    expect(openChannelSync).not.toBeCalled();
 
     // TODO(hsjoberg): check if information got correctly stored in db
 

@@ -107,7 +107,6 @@ export async function openChannelSync(
   localFundingAmount: Long,
   pushSat: Long,
   privateChannel: boolean,
-  spendUnconfirmed: boolean,
   zeroConf: boolean,
   taprootChannel: boolean,
   memo?: string,
@@ -119,9 +118,12 @@ export async function openChannelSync(
     localFundingAmount,
     pushSat,
     targetConf: 1,
-    minConfs: spendUnconfirmed ? 0 : 1,
+    // Never fund a channel with unconfirmed UTXOs. An unconfirmed input can be
+    // double-spent, and with zero-conf channels the pushed funds are usable
+    // before the funding transaction confirms.
+    minConfs: 1,
     private: privateChannel,
-    spendUnconfirmed,
+    spendUnconfirmed: false,
     zeroConf,
     commitmentType,
     memo,
@@ -198,5 +200,43 @@ export function subscribePeerEvents(lightning: Client) {
     request,
     new Metadata(),
     undefined,
+  );
+}
+
+export async function walletBalance(lightning: Client) {
+  const request = lnrpc.WalletBalanceRequest.encode({}).finish();
+  return await grpcMakeUnaryRequest<lnrpc.WalletBalanceResponse>(
+    lightning,
+    "/lnrpc.Lightning/WalletBalance",
+    request,
+    lnrpc.WalletBalanceResponse.decode,
+  );
+}
+
+export async function closedChannels(lightning: Client) {
+  const request = lnrpc.ClosedChannelsRequest.encode({}).finish();
+  return await grpcMakeUnaryRequest<lnrpc.ClosedChannelsResponse>(
+    lightning,
+    "/lnrpc.Lightning/ClosedChannels",
+    request,
+    lnrpc.ClosedChannelsResponse.decode,
+  );
+}
+
+/**
+ * Looks up how lnd finally resolved an incoming HTLC. Requires lnd to run with
+ * `store-final-htlc-resolutions=true`. lnd answers NOT_FOUND while the HTLC is
+ * unresolved (or when resolutions aren't stored).
+ */
+export async function lookupHtlcResolution(lightning: Client, chanId: Long, htlcIndex: Long) {
+  const request = lnrpc.LookupHtlcResolutionRequest.encode({
+    chanId,
+    htlcIndex,
+  }).finish();
+  return await grpcMakeUnaryRequest<lnrpc.LookupHtlcResolutionResponse>(
+    lightning,
+    "/lnrpc.Lightning/LookupHtlcResolution",
+    request,
+    lnrpc.LookupHtlcResolutionResponse.decode,
   );
 }

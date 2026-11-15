@@ -40,5 +40,15 @@ export function createForwardHtlcInterceptRequest(
     }),
     paymentHash,
     outgoingRequestedChanId: Long.fromValue(fakeChannelId),
+    // Plenty of blocks before lnd would auto-fail it (mocked height 800 000).
+    incomingExpiry: 800_200,
+    autoFailHeight: 800_187,
   }).finish();
+}
+
+/** A 32-byte preimage whose leading bytes are `prefix`. */
+export function createPreimage(...prefix: number[]) {
+  const preimage = new Uint8Array(32);
+  preimage.set(prefix);
+  return preimage;
 }

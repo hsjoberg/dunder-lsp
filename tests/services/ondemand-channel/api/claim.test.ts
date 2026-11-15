@@ -16,6 +16,7 @@ import {
   reserveChannelOpenAttempt,
 } from "../../../../src/db/channel-open-attempt";
 import {
+  AMBIGUOUS_RELEASE_DELAY_MS,
   CHANNEL_OPEN_ATTEMPT_STALE_MS,
   cancelStaleChannelOpenAttempt,
   getChannelOpenAttemptMemo,
@@ -76,8 +77,8 @@ async function seedUnclaimed(
     pubkey = PUBKEY,
     channelId = "claim-channel-1",
     amountSat = 5000,
-    incomingChannelId = 1,
-    htlcId = 1,
+    incomingChannelId = "1",
+    htlcId = "1",
   } = {},
 ) {
   await createChannelRequest(db, {
@@ -155,7 +156,6 @@ describe("/ondemand-channel/claim", () => {
       source: "AUTOMATIC",
       requestedChannelId: "claim-channel-1",
       requiredAmountSat: 5000,
-      spendUnconfirmed: false,
       zeroConf: true,
       taprootChannel: true,
     });
@@ -166,7 +166,6 @@ describe("/ondemand-channel/claim", () => {
       lightning: {} as any,
       pubkey: PUBKEY,
       source: "CLAIM",
-      spendUnconfirmed: true,
       zeroConf: true,
       taprootChannel: true,
     });
@@ -183,8 +182,8 @@ describe("/ondemand-channel/claim", () => {
     await seedUnclaimed(db, { channelId: "automatic-channel-1" });
     await seedUnclaimed(db, {
       channelId: "automatic-channel-2",
-      incomingChannelId: 2,
-      htlcId: 2,
+      incomingChannelId: "2",
+      htlcId: "2",
     });
 
     let resolveFirstOpen: (value: lnrpc.ChannelPoint) => void = () => {};
@@ -209,7 +208,6 @@ describe("/ondemand-channel/claim", () => {
       source: "AUTOMATIC",
       requestedChannelId: "automatic-channel-1",
       requiredAmountSat: 5000,
-      spendUnconfirmed: false,
       zeroConf: false,
       taprootChannel: false,
     });
@@ -271,7 +269,7 @@ describe("/ondemand-channel/claim", () => {
       feeSat: 10,
       pushAmountSat: 4990,
     });
-    expect(openCall[8]).toBe(getChannelOpenAttemptMemo(attempt!.attemptId));
+    expect(openCall[7]).toBe(getChannelOpenAttemptMemo(attempt!.attemptId));
   });
 
   test("never downgrades a rejected Taproot channel to a regular channel", async () => {
@@ -286,8 +284,8 @@ describe("/ondemand-channel/claim", () => {
 
     expect(openChannelSync).toBeCalledTimes(1);
     const taprootCall = (openChannelSync as jest.Mock).mock.calls[0];
+    expect(taprootCall[5]).toBe(true);
     expect(taprootCall[6]).toBe(true);
-    expect(taprootCall[7]).toBe(true);
 
     const attempt = await db.get<{
       status: string;
@@ -301,7 +299,7 @@ describe("/ondemand-channel/claim", () => {
       zeroConf: 1,
       taprootChannel: 1,
     });
-    expect((await getHtlcSettlement(db, "claim-channel-1", 1, 1))?.channelOpenAttemptId).toBe(
+    expect((await getHtlcSettlement(db, "claim-channel-1", "1", "1"))?.channelOpenAttemptId).toBe(
       (await getActiveChannelOpenAttempt(db, PUBKEY))?.attemptId,
     );
   });
@@ -320,7 +318,6 @@ describe("/ondemand-channel/claim", () => {
       lightning: {} as any,
       pubkey: PUBKEY,
       source: "CLAIM",
-      spendUnconfirmed: false,
       zeroConf: true,
       taprootChannel: true,
     });
@@ -328,7 +325,7 @@ describe("/ondemand-channel/claim", () => {
     expect(result.status).toBe("UNKNOWN");
     expect(openChannelSync).toBeCalledTimes(1);
     expect((await getActiveChannelOpenAttempt(db, PUBKEY))?.status).toBe("UNKNOWN");
-    const settlement = await getHtlcSettlement(db, "claim-channel-1", 1, 1);
+    const settlement = await getHtlcSettlement(db, "claim-channel-1", "1", "1");
     expect(settlement?.channelOpenAttemptId).not.toBeNull();
     await expect(
       db.get("SELECT status, rpcDispatched, dispatchCount FROM channelOpenAttempt"),
@@ -347,7 +344,6 @@ describe("/ondemand-channel/claim", () => {
       lightning: {} as any,
       pubkey: PUBKEY,
       source: "CLAIM",
-      spendUnconfirmed: true,
       zeroConf: true,
       taprootChannel: true,
     });
@@ -356,7 +352,7 @@ describe("/ondemand-channel/claim", () => {
     expect(openChannelSync).toBeCalledTimes(1);
     const attempt = await getActiveChannelOpenAttempt(db, PUBKEY);
     expect(attempt?.status).toBe("UNKNOWN");
-    expect((await getHtlcSettlement(db, "claim-channel-1", 1, 1))?.channelOpenAttemptId).toBe(
+    expect((await getHtlcSettlement(db, "claim-channel-1", "1", "1"))?.channelOpenAttemptId).toBe(
       attempt?.attemptId,
     );
   });
@@ -373,7 +369,6 @@ describe("/ondemand-channel/claim", () => {
       lightning: {} as any,
       pubkey: PUBKEY,
       source: "CLAIM",
-      spendUnconfirmed: true,
       zeroConf: true,
       taprootChannel: true,
     });
@@ -400,14 +395,14 @@ describe("/ondemand-channel/claim", () => {
     await seedUnclaimed(db, {
       channelId: "claim-channel-2",
       amountSat: 2000,
-      incomingChannelId: 2,
-      htlcId: 2,
+      incomingChannelId: "2",
+      htlcId: "2",
     });
     resolveOpen(successfulChannelPoint());
     await claim;
 
-    const first = await getHtlcSettlement(db, "claim-channel-1", 1, 1);
-    const second = await getHtlcSettlement(db, "claim-channel-2", 2, 2);
+    const first = await getHtlcSettlement(db, "claim-channel-1", "1", "1");
+    const second = await getHtlcSettlement(db, "claim-channel-2", "2", "2");
     expect(first?.claimed).toBe(1);
     expect(first?.channelOpenAttemptId).toBeTruthy();
     expect(second?.claimed).toBe(0);
@@ -429,16 +424,16 @@ describe("/ondemand-channel/claim", () => {
     });
     await createHtlcSettlement(db, {
       channelId: "incomplete-channel",
-      incomingChannelId: 1,
-      htlcId: 1,
+      incomingChannelId: "1",
+      htlcId: "1",
       amountSat: 3000,
       settled: 1,
       claimed: 0,
     });
     await createHtlcSettlement(db, {
       channelId: "incomplete-channel",
-      incomingChannelId: 2,
-      htlcId: 2,
+      incomingChannelId: "2",
+      htlcId: "2",
       amountSat: 2000,
       settled: 0,
       claimed: 0,
@@ -446,14 +441,14 @@ describe("/ondemand-channel/claim", () => {
     await seedUnclaimed(db, {
       channelId: "complete-channel",
       amountSat: 4000,
-      incomingChannelId: 3,
-      htlcId: 3,
+      incomingChannelId: "3",
+      htlcId: "3",
     });
     await seedUnclaimed(db, {
       channelId: "complete-channel-2",
       amountSat: 1500,
-      incomingChannelId: 4,
-      htlcId: 4,
+      incomingChannelId: "4",
+      htlcId: "4",
     });
 
     let resolveFirstOpen: (value: lnrpc.ChannelPoint) => void = () => {};
@@ -477,8 +472,8 @@ describe("/ondemand-channel/claim", () => {
     // already-complete request is opening.
     await updateHtlcSettlement(db, {
       channelId: "incomplete-channel",
-      incomingChannelId: 2,
-      htlcId: 2,
+      incomingChannelId: "2",
+      htlcId: "2",
       amountSat: 2000,
       settled: 1,
       claimed: 0,
@@ -492,8 +487,8 @@ describe("/ondemand-channel/claim", () => {
         "incomplete-channel",
       ),
     ).resolves.toEqual({ status: "REGISTERED", automaticOpenQueued: 1 });
-    expect((await getHtlcSettlement(db, "incomplete-channel", 1, 1))?.claimed).toBe(0);
-    expect((await getHtlcSettlement(db, "incomplete-channel", 2, 2))?.claimed).toBe(0);
+    expect((await getHtlcSettlement(db, "incomplete-channel", "1", "1"))?.claimed).toBe(0);
+    expect((await getHtlcSettlement(db, "incomplete-channel", "2", "2"))?.claimed).toBe(0);
 
     await recoverChannelOpenState(db, {} as any);
 
@@ -515,7 +510,7 @@ describe("/ondemand-channel/claim", () => {
     const attempt = await getActiveChannelOpenAttempt(db, PUBKEY);
     expect(attempt?.status).toBe("UNKNOWN");
     expect(attempt?.error).toBe("transport lost");
-    const settlement = await getHtlcSettlement(db, "claim-channel-1", 1, 1);
+    const settlement = await getHtlcSettlement(db, "claim-channel-1", "1", "1");
     expect(settlement?.claimed).toBe(0);
     expect(settlement?.channelOpenAttemptId).toBe(attempt?.attemptId);
 
@@ -537,7 +532,7 @@ describe("/ondemand-channel/claim", () => {
       maximumAmountSat: 1_000_000,
       feeSat: 10,
       existingChannelPoints: [],
-      spendUnconfirmed: false,
+      existingClosedChannelPoints: [],
       zeroConf: true,
       taprootChannel: true,
     });
@@ -563,7 +558,7 @@ describe("/ondemand-channel/claim", () => {
     expect(result.status).toBe("CANCELLED");
     expect(openChannelSync).not.toBeCalled();
     await expect(getActiveChannelOpenAttempt(db, PUBKEY)).resolves.toBeUndefined();
-    expect((await getHtlcSettlement(db, "claim-channel-1", 1, 1))?.channelOpenAttemptId).toBeNull();
+    expect((await getHtlcSettlement(db, "claim-channel-1", "1", "1"))?.channelOpenAttemptId).toBeNull();
   });
 
   test("claim continues after releasing a stale undispatched migrated reservation", async () => {
@@ -580,7 +575,7 @@ describe("/ondemand-channel/claim", () => {
       maximumAmountSat: 1_000_000,
       feeSat: 10,
       existingChannelPoints: [],
-      spendUnconfirmed: true,
+      existingClosedChannelPoints: [],
       zeroConf: true,
       taprootChannel: true,
     });
@@ -599,7 +594,7 @@ describe("/ondemand-channel/claim", () => {
 
     expect(claimReply.payload).toEqual({ status: "OK", amountSat: 5000 });
     expect(openChannelSync).toBeCalledTimes(1);
-    expect((openChannelSync as jest.Mock).mock.calls[0][7]).toBe(true);
+    expect((openChannelSync as jest.Mock).mock.calls[0][6]).toBe(true);
     await expect(
       db.get("SELECT status FROM channelOpenAttempt WHERE attemptId = ?", "stale-migrated-claim-attempt"),
     ).resolves.toEqual({ status: "CANCELLED" });
@@ -618,7 +613,7 @@ describe("/ondemand-channel/claim", () => {
       maximumAmountSat: 1_000_000,
       feeSat: 10,
       existingChannelPoints: [],
-      spendUnconfirmed: false,
+      existingClosedChannelPoints: [],
       zeroConf: true,
       taprootChannel: true,
     });
@@ -638,7 +633,7 @@ describe("/ondemand-channel/claim", () => {
     await expect(getChannelRequestUnclaimedAmount(db, PUBKEY)).resolves.toBe(0);
   });
 
-  test("never releases a stale dispatched attempt from an empty lnd snapshot", async () => {
+  test("releases a dispatched attempt only after lnd's funding flow can have timed out", async () => {
     const db = await getDb(true);
     await seedUnclaimed(db);
     const reservation = await reserveChannelOpenAttempt(db, {
@@ -648,7 +643,7 @@ describe("/ondemand-channel/claim", () => {
       maximumAmountSat: 1_000_000,
       feeSat: 10,
       existingChannelPoints: [],
-      spendUnconfirmed: false,
+      existingClosedChannelPoints: [],
       zeroConf: true,
       taprootChannel: true,
     });
@@ -666,7 +661,8 @@ describe("/ondemand-channel/claim", () => {
       reservation.attempt.attemptId,
     );
 
-    const result = await cancelStaleChannelOpenAttempt({
+    // lnd may still be funding the channel until its funding flow times out.
+    const early = await cancelStaleChannelOpenAttempt({
       db,
       lightning: {} as any,
       attemptId: reservation.attempt.attemptId,
@@ -675,17 +671,29 @@ describe("/ondemand-channel/claim", () => {
       now: updatedAt + CHANNEL_OPEN_ATTEMPT_STALE_MS,
     });
 
-    expect(result).toMatchObject({
-      status: "UNSAFE_TO_CANCEL",
-      matchingMemoCount: 0,
-      newChannelPoints: [],
-      pendingPeerChannelCount: 0,
-      unidentifiedPeerChannelCount: 0,
+    expect(early).toMatchObject({
+      status: "NOT_STALE",
+      staleAt: updatedAt + AMBIGUOUS_RELEASE_DELAY_MS,
     });
     expect((await getActiveChannelOpenAttempt(db, PUBKEY))?.status).toBe("OPENING");
-    expect((await getHtlcSettlement(db, "claim-channel-1", 1, 1))?.channelOpenAttemptId).toBe(
+    expect((await getHtlcSettlement(db, "claim-channel-1", "1", "1"))?.channelOpenAttemptId).toBe(
       reservation.attempt.attemptId,
     );
+
+    // After that, an lnd that shows no channel for the attempt releases it.
+    const released = await cancelStaleChannelOpenAttempt({
+      db,
+      lightning: {} as any,
+      attemptId: reservation.attempt.attemptId,
+      expectedUpdatedAt: updatedAt,
+      reason: "Operator verified no channel was opened",
+      now: updatedAt + AMBIGUOUS_RELEASE_DELAY_MS,
+    });
+    expect(released.status).toBe("CANCELLED");
+    expect(await getActiveChannelOpenAttempt(db, PUBKEY)).toBeUndefined();
+    expect(
+      (await getHtlcSettlement(db, "claim-channel-1", "1", "1"))?.channelOpenAttemptId,
+    ).toBeNull();
   });
 
   test("operator cancellation fails closed when lnd shows a new pending channel", async () => {
@@ -698,7 +706,7 @@ describe("/ondemand-channel/claim", () => {
       maximumAmountSat: 1_000_000,
       feeSat: 10,
       existingChannelPoints: [],
-      spendUnconfirmed: false,
+      existingClosedChannelPoints: [],
       zeroConf: true,
       taprootChannel: true,
     });
@@ -733,7 +741,7 @@ describe("/ondemand-channel/claim", () => {
       attemptId: reservation.attempt.attemptId,
       expectedUpdatedAt: updatedAt,
       reason: "Operator requested cancellation check",
-      now: updatedAt + CHANNEL_OPEN_ATTEMPT_STALE_MS,
+      now: updatedAt + AMBIGUOUS_RELEASE_DELAY_MS,
     });
 
     expect(result).toMatchObject({
@@ -742,7 +750,7 @@ describe("/ondemand-channel/claim", () => {
       pendingPeerChannelCount: 1,
     });
     expect((await getActiveChannelOpenAttempt(db, PUBKEY))?.status).toBe("OPENING");
-    expect((await getHtlcSettlement(db, "claim-channel-1", 1, 1))?.channelOpenAttemptId).toBe(
+    expect((await getHtlcSettlement(db, "claim-channel-1", "1", "1"))?.channelOpenAttemptId).toBe(
       reservation.attempt.attemptId,
     );
   });
@@ -771,7 +779,7 @@ describe("/ondemand-channel/claim", () => {
       ],
     });
     await (handler as any)(claimRequest(), reply());
-    expect((await getHtlcSettlement(db, "claim-channel-1", 1, 1))?.claimed).toBe(0);
+    expect((await getHtlcSettlement(db, "claim-channel-1", "1", "1"))?.claimed).toBe(0);
 
     __setPendingChannelsResponse({
       pendingOpenChannels: [
@@ -789,7 +797,71 @@ describe("/ondemand-channel/claim", () => {
 
     expect(openChannelSync).toBeCalledTimes(1);
     await expect(getActiveChannelOpenAttempt(db, PUBKEY)).resolves.toBeUndefined();
-    const settlement = await getHtlcSettlement(db, "claim-channel-1", 1, 1);
+    const settlement = await getHtlcSettlement(db, "claim-channel-1", "1", "1");
     expect(settlement?.claimed).toBe(1);
+  });
+  test("pays out a payment lnd only partly settled, but not automatically", async () => {
+    const db = await getDb(true);
+    await createChannelRequest(db, {
+      channelId: "partly-settled",
+      pubkey: PUBKEY,
+      preimage: "partly-settled-preimage",
+      status: "REGISTERED",
+      start: 0,
+      expire: 600,
+      expectedAmountSat: 5000,
+      channelPoint: null,
+    });
+    // lnd failed the other 2000 sat part after this one settled, so its row
+    // was removed and the request can never complete.
+    await createHtlcSettlement(db, {
+      channelId: "partly-settled",
+      incomingChannelId: "1",
+      htlcId: "1",
+      amountSat: 3000,
+      settled: 1,
+      claimed: 0,
+    });
+
+    const automatic = await openChannelForSettledHtlcs({
+      db,
+      lightning: {} as any,
+      pubkey: PUBKEY,
+      source: "AUTOMATIC",
+      requestedChannelId: "partly-settled",
+      requiredAmountSat: 5000,
+      zeroConf: false,
+      taprootChannel: false,
+    });
+    expect(automatic).toEqual({ status: "AMOUNT_MISMATCH", amountSat: 3000 });
+    expect(openChannelSync).not.toBeCalled();
+
+    const claimReply = reply();
+    await (Claim(db, {} as any) as any)(claimRequest(), claimReply);
+
+    expect(claimReply.payload).toEqual({ status: "OK", amountSat: 3000 });
+    await waitForExpect(() => expect(openChannelSync).toBeCalledTimes(1));
+    expect((openChannelSync as jest.Mock).mock.calls[0][3].toString()).toBe("2990");
+    await waitForExpect(async () =>
+      expect((await getHtlcSettlement(db, "partly-settled", "1", "1"))?.claimed).toBe(1),
+    );
+  });
+
+  test("does not pay out a request while one of its parts awaits settlement", async () => {
+    const db = await getDb(true);
+    await seedUnclaimed(db, { channelId: "still-settling" });
+    await createHtlcSettlement(db, {
+      channelId: "still-settling",
+      incomingChannelId: "2",
+      htlcId: "2",
+      amountSat: 1000,
+      settled: 0,
+      claimed: 0,
+    });
+
+    await (Claim(db, {} as any) as any)(claimRequest(), reply());
+
+    expect(openChannelSync).not.toBeCalled();
+    expect((await getHtlcSettlement(db, "still-settling", "1", "1"))?.claimed).toBe(0);
   });
 });

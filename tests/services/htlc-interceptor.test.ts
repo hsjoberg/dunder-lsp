@@ -1,7 +1,7 @@
 import Long from "long";
 import { EventEmitter } from "events";
 
-import { routerrpc } from "../../src/proto";
+import { lnrpc, routerrpc } from "../../src/proto";
 import {
   handled,
   HtlcHandler,
@@ -201,5 +201,63 @@ describe("HtlcInterceptorCoordinator", () => {
     expect(streams).toHaveLength(2);
 
     coordinator.stop();
+  });
+  test("answers an HTLC at most once", async () => {
+    const writes: routerrpc.ForwardHtlcInterceptResponse[] = [];
+    const answerTwice: HtlcHandler = (htlc, writer) => {
+      writer.respond(routerrpc.ResolveHoldForwardAction.SETTLE, htlc.incomingCircuitKey);
+      writer.respond(routerrpc.ResolveHoldForwardAction.FAIL, htlc.incomingCircuitKey);
+      return handled();
+    };
+    const coordinator = new HtlcInterceptorCoordinator(stream(writes), [answerTwice]);
+
+    await coordinator.handle(request(Long.fromValue(1), Long.fromValue(2)));
+
+    expect(writes.map((write) => write.action)).toEqual([
+      routerrpc.ResolveHoldForwardAction.SETTLE,
+    ]);
+  });
+
+  test("tells listeners when the stream is replaced", async () => {
+    jest.useFakeTimers();
+    try {
+      const streams: ReconnectableStream[] = [];
+      const coordinator = new HtlcInterceptorCoordinator(
+        () => {
+          const next = new ReconnectableStream();
+          streams.push(next);
+          return next as any;
+        },
+        [() => noDecision()],
+      );
+      const onReset = jest.fn();
+      coordinator.onStreamReset(onReset);
+      coordinator.start();
+
+      streams[0].emit("error", new Error("lnd restarted"));
+
+      expect(onReset).toBeCalledTimes(1);
+      coordinator.stop();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+  test("never sends a failure code lnd's interceptor rejects", async () => {
+    const writes: routerrpc.ForwardHtlcInterceptResponse[] = [];
+    const failUnsupported: HtlcHandler = (htlc, writer) => {
+      writer.respond(
+        routerrpc.ResolveHoldForwardAction.FAIL,
+        htlc.incomingCircuitKey,
+        undefined,
+        lnrpc.Failure.FailureCode.INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS,
+      );
+      return handled();
+    };
+    const coordinator = new HtlcInterceptorCoordinator(stream(writes), [failUnsupported]);
+
+    await coordinator.handle(request(Long.fromValue(1), Long.fromValue(2)));
+
+    expect(writes[0].action).toBe(routerrpc.ResolveHoldForwardAction.FAIL);
+    expect(writes[0].failureCode).toBe(0);
   });
 });

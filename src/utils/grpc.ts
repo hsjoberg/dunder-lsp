@@ -17,6 +17,22 @@ export const rpcImpl = (rpc: string, client: Client) => {
   };
 };
 
+/**
+ * Keepalive pings on the connection to lnd. Without them a connection that dies
+ * silently (lnd host loses power, a NAT or firewall drops it) never produces an
+ * error, so the HTLC interceptor and event streams would look connected while
+ * receiving nothing, and would never reconnect. With pings, a missing reply
+ * closes the connection and every open stream errors and reconnects.
+ *
+ * lnd rejects clients that ping more often than `grpc.client-ping-min-wait`
+ * (default 5s) and, by default, pings sent while no call is open.
+ */
+export const GRPC_CHANNEL_OPTIONS = {
+  "grpc.keepalive_time_ms": 60_000,
+  "grpc.keepalive_timeout_ms": 20_000,
+  "grpc.keepalive_permit_without_calls": 0,
+};
+
 export const getGrpcClients = () => {
   const loaderOptions = {
     keepCase: true,
@@ -47,8 +63,12 @@ export const getGrpcClients = () => {
   let callCreds = credentials.combineCallCredentials(macaroonCreds);
   let creds = credentials.combineChannelCredentials(sslCreds, macaroonCreds);
 
-  let lightning = new (lnrpcProto as any).Lightning(grpcServer, creds) as Client;
-  let router = new (routerProto as any).Router(grpcServer, creds) as Client;
+  let lightning = new (lnrpcProto as any).Lightning(
+    grpcServer,
+    creds,
+    GRPC_CHANNEL_OPTIONS,
+  ) as Client;
+  let router = new (routerProto as any).Router(grpcServer, creds, GRPC_CHANNEL_OPTIONS) as Client;
 
   return { lightning, router };
 };

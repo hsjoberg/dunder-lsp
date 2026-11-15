@@ -9,7 +9,7 @@ import { bytesToHexString, sha256Buffer, timeout } from "../../../../src/utils/c
 
 // Mocked functions
 import { openChannelSync } from "../../../../mocks/utils/lnd-api";
-import { createForwardHtlcInterceptRequest, sendRegisterRequest } from "./register-helpers";
+import { createForwardHtlcInterceptRequest, sendRegisterRequest, createPreimage } from "./register-helpers";
 
 describe("/ondemand-channel/register", () => {
   it("should fail HTLC that has a paymentHash that doesn't match with the registered preimage", async () => {
@@ -17,8 +17,8 @@ describe("/ondemand-channel/register", () => {
     const app = build();
 
     const amountSat = 20000;
-    const preimage = new Uint8Array([3]);
-    const invalidPreimage = new Uint8Array([4]);
+    const preimage = createPreimage(3);
+    const invalidPreimage = createPreimage(4);
     const paymentHash = sha256Buffer(preimage);
     const pubkey = "abcdef12345";
     const signature = "validsig";
