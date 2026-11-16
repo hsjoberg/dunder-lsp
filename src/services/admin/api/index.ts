@@ -17,10 +17,10 @@ export interface IErrorResponse {
 const AdminApi = async function (app, { lightning, router }) {
   const db = await getDb();
 
-  app.register(Login);
-  app.register(AdminAdmin);
-  app.register(AdminChannelRequests);
-  app.register(AdminHtlcSettlements);
+  app.register(Login, { lightning, router });
+  app.register(AdminAdmin, { lightning, router });
+  app.register(AdminChannelRequests, { lightning, router });
+  app.register(AdminHtlcSettlements, { lightning, router });
   app.register(AdminPendingChannels, { lightning, router });
   app.register(AdminChannelOpenAttempts, { lightning });
 

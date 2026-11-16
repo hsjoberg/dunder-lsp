@@ -51,6 +51,30 @@ describe("BoundedSessionStore", () => {
     await expect(getFromStore(store, "a")).resolves.toBeNull();
   });
 
+  test("compareAndSet only replaces the session generation it was loaded from", async () => {
+    const store = new BoundedSessionStore({
+      idleTimeoutMs: 60_000,
+      absoluteTimeoutMs: 60_000,
+      maxSessions: 10,
+    });
+    const compareAndSet = (id: string, generation: string) =>
+      new Promise<unknown>((resolve) =>
+        store.compareAndSet(id, generation, fakeSession(true), (error) => resolve(error)),
+      );
+
+    // Destroyed (logout): not brought back.
+    store.set("a", fakeSession(), () => {});
+    store.destroy("a", () => {});
+    expect(await compareAndSet("a", "a")).toMatchObject({ code: "ENOENT" });
+    await expect(getFromStore(store, "a")).resolves.toBeNull();
+
+    // Regenerated (login) under the same store key: an older generation loses.
+    const regenerated = { ...fakeSession(), __fastifySessionMetadata: { generation: "new" } };
+    store.set("b", regenerated as any, () => {});
+    expect(await compareAndSet("b", "old")).toMatchObject({ code: "ENOENT" });
+    expect(await compareAndSet("b", "new")).toBeUndefined();
+  });
+
   test("evicts the oldest unauthenticated sessions first when full", async () => {
     const store = new BoundedSessionStore({
       idleTimeoutMs: 60_000,

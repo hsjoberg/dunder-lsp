@@ -3,6 +3,7 @@ import { Client } from "@grpc/grpc-js";
 import fastifyStatic from "@fastify/static";
 import fastifySession from "@fastify/session";
 import fastifyCookie from "@fastify/cookie";
+import fastifyWebsocket from "@fastify/websocket";
 import path from "path";
 import config from "config";
 
@@ -47,7 +48,7 @@ const Admin = async function (app, { lightning, router }) {
     }),
     secret: bytesToHexString(await generateBytes(32)),
   });
-  app.register(require("@fastify/websocket"));
+  app.register(fastifyWebsocket);
 
   app.register(require("./api/index"), {
     prefix: "/api",
@@ -61,7 +62,7 @@ const Admin = async function (app, { lightning, router }) {
   });
 
   (app.get as any)("/", (request: any, reply: any) => {
-    return reply.sendFile("./index.html");
+    return reply.sendFile("index.html");
   });
 } as FastifyPluginAsync<{ lightning: Client; router: Client }>;
 
