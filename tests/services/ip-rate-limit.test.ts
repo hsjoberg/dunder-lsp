@@ -1,6 +1,7 @@
 import config from "config";
 
 import build from "../../src/app";
+import { clientKey } from "../../src/services/ip-rate-limit";
 
 /** Overrides single config keys for one test. The config object is frozen. */
 function withConfig(overrides: Record<string, unknown>) {
@@ -73,5 +74,49 @@ describe("per-IP rate limit", () => {
     } finally {
       await app.close();
     }
+  });
+
+  test("can't be skipped with a percent-encoded path", async () => {
+    const restore = withConfig({ ipRateLimitPerMinute: 2, trustProxy: true });
+    const app = build();
+    try {
+      const headers = { "x-forwarded-for": "198.51.100.9" };
+      // The router decodes these to /getInfo and /ondemand-channel/... .
+      const urls = ["/%67etInfo", "/getInfo", "/ondemand%2Dchannel/service-status"];
+      const codes = [];
+      for (const url of urls) {
+        codes.push((await app.inject({ url, headers })).statusCode);
+      }
+      expect(codes).toEqual([200, 200, 429]);
+    } finally {
+      restore();
+      await app.close();
+    }
+  });
+
+  test("limits IPv6 clients per /64", async () => {
+    const restore = withConfig({ ipRateLimitPerMinute: 1, trustProxy: true });
+    const app = build();
+    try {
+      const from = (ip: string) => ({ url: "/getInfo", headers: { "x-forwarded-for": ip } });
+      expect((await app.inject(from("2001:db8:1:2::1"))).statusCode).toBe(200);
+      // Another address in the same /64.
+      expect((await app.inject(from("2001:db8:1:2:aaaa::7"))).statusCode).toBe(429);
+      // Another /64.
+      expect((await app.inject(from("2001:db8:1:3::1"))).statusCode).toBe(200);
+    } finally {
+      restore();
+      await app.close();
+    }
+  });
+
+  test("keys addresses by IPv4 address or IPv6 /64", () => {
+    expect(clientKey("198.51.100.1")).toBe("198.51.100.1");
+    expect(clientKey("::ffff:198.51.100.1")).toBe("198.51.100.1");
+    expect(clientKey("2001:0db8:0001:0002:0000:0000:0000:0001")).toBe("2001:db8:1:2::/64");
+    expect(clientKey("2001:db8:1:2::1")).toBe("2001:db8:1:2::/64");
+    expect(clientKey("2001:db8::1")).toBe("2001:db8:0:0::/64");
+    expect(clientKey("::1")).toBe("0:0:0:0::/64");
+    expect(clientKey("fe80::1%eth0")).toBe("fe80:0:0:0::/64");
   });
 });
