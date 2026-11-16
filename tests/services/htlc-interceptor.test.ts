@@ -3,11 +3,13 @@ import { EventEmitter } from "events";
 
 import { lnrpc, routerrpc } from "../../src/proto";
 import {
+  createOnChainOfferCheck,
   handled,
   HtlcHandler,
   HtlcInterceptorCoordinator,
   noDecision,
 } from "../../src/services/htlc-interceptor";
+import { __listChannels, __setListChannelsResponse } from "../../mocks/utils/lnd-api";
 
 function request(incomingChannelId: Long, outgoingChannelId: Long) {
   return routerrpc.ForwardHtlcInterceptRequest.create({
@@ -259,5 +261,123 @@ describe("HtlcInterceptorCoordinator", () => {
 
     expect(writes[0].action).toBe(routerrpc.ResolveHoldForwardAction.FAIL);
     expect(writes[0].failureCode).toBe(0);
+  });
+
+  describe("an HTLC offered again after its channel went on-chain", () => {
+    const SETTLE = routerrpc.ResolveHoldForwardAction.SETTLE;
+    const onChain = () => true;
+
+    test("is left unanswered by default, on FAIL and on handler errors", async () => {
+      for (const handler of [
+        () => noDecision(),
+        ((htlc, writer) => {
+          writer.respond(routerrpc.ResolveHoldForwardAction.FAIL, htlc.incomingCircuitKey);
+          return handled();
+        }) as HtlcHandler,
+        () => {
+          throw new Error("boom");
+        },
+      ]) {
+        const writes: routerrpc.ForwardHtlcInterceptResponse[] = [];
+        const coordinator = new HtlcInterceptorCoordinator(stream(writes), [handler], {
+          isOnChainOffer: onChain,
+        });
+        await coordinator.handle(request(Long.fromValue(1), Long.fromValue(2)));
+        // lnd accepts only SETTLE here and would end the stream on anything else.
+        expect(writes).toEqual([]);
+      }
+    });
+
+    test("can still be settled, so lnd gets the preimage for its on-chain claim", async () => {
+      const writes: routerrpc.ForwardHtlcInterceptResponse[] = [];
+      let sawOnChain: boolean | undefined;
+      const coordinator = new HtlcInterceptorCoordinator(
+        stream(writes),
+        [
+          (htlc, writer) => {
+            sawOnChain = writer.onChain;
+            writer.respond(SETTLE, htlc.incomingCircuitKey, new Uint8Array(32));
+            return handled();
+          },
+        ],
+        { isOnChainOffer: onChain },
+      );
+      await coordinator.handle(request(Long.fromValue(1), Long.fromValue(2)));
+      expect(sawOnChain).toBe(true);
+      expect(writes.map((write) => write.action)).toEqual([SETTLE]);
+    });
+  });
+
+  test("recognises an on-chain offer by lnd's auto-fail height and a channel no longer open", async () => {
+    __setListChannelsResponse({ channels: [{ chanId: Long.fromValue(5, true) }] });
+    __listChannels.mockClear();
+    let time = 0;
+    const isOnChain = createOnChainOfferCheck({} as any, () => time);
+    const offer = (chanId: number, autoFailHeight: number) =>
+      routerrpc.ForwardHtlcInterceptRequest.create({
+        incomingCircuitKey: { chanId: Long.fromValue(chanId, true), htlcId: Long.fromValue(1) },
+        incomingExpiry: 500,
+        autoFailHeight,
+      });
+
+    // Ordinary offers (auto-fail 13 blocks before expiry) cost no lnd call.
+    expect(await isOnChain(offer(9, 487))).toBe(false);
+    expect(__listChannels).not.toHaveBeenCalled();
+
+    expect(await isOnChain(offer(5, 500))).toBe(false); // Channel still open.
+    expect(await isOnChain(offer(9, 500))).toBe(true); // Channel gone.
+    // The open channels are reloaded at most once a second.
+    expect(__listChannels).toHaveBeenCalledTimes(1);
+
+    // Channel 5 closes: seen once the list is reloaded, even though it was
+    // open in the previous list.
+    __setListChannelsResponse({ channels: [] });
+    time += 1_000;
+    expect(await isOnChain(offer(5, 500))).toBe(true);
+    expect(__listChannels).toHaveBeenCalledTimes(2);
+    __setListChannelsResponse({ channels: [] });
+  });
+
+  test("resets the reconnect backoff only after a stream stayed up, not on data", async () => {
+    jest.useFakeTimers();
+    const delays: number[] = [];
+    const errorSpy = jest.spyOn(console, "error").mockImplementation((message: unknown) => {
+      const match = /in (\d+)ms/.exec(String(message));
+      if (match) delays.push(Number(match[1]));
+    });
+    try {
+      const streams: ReconnectableStream[] = [];
+      const coordinator = new HtlcInterceptorCoordinator(
+        () => {
+          const next = new ReconnectableStream();
+          streams.push(next);
+          return next as any;
+        },
+        [() => noDecision()],
+        { reconnectDelayMs: 10, stableStreamMs: 1_000 },
+      );
+      coordinator.start();
+      const dropAfterReplay = () => {
+        const current = streams[streams.length - 1];
+        emitInterceptRequest(current, request(Long.fromValue(1), Long.fromValue(2)));
+        current.emit("error", new Error("lnd ended the stream"));
+      };
+
+      dropAfterReplay();
+      jest.advanceTimersByTime(10);
+      dropAfterReplay();
+      jest.advanceTimersByTime(20);
+      dropAfterReplay();
+      jest.advanceTimersByTime(40);
+      // This stream stays up long enough.
+      jest.advanceTimersByTime(1_000);
+      dropAfterReplay();
+
+      expect(delays).toEqual([10, 20, 40, 10]);
+      coordinator.stop();
+    } finally {
+      errorSpy.mockRestore();
+      jest.useRealTimers();
+    }
   });
 });

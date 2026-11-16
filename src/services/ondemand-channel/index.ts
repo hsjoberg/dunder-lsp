@@ -16,6 +16,7 @@ import {
 } from "./api/register";
 import config from "config";
 import { startChannelOpenRecovery } from "./channel-open";
+import { startSettlementDeadlineGuard } from "./settlement-deadline";
 
 export interface IErrorResponse {
   status: "ERROR";
@@ -26,7 +27,7 @@ const OnDemandChannel = async function (app, { lightning, router }) {
   const db = await getDb();
   // Figure out the pubkey of our own node
   const servicePubKey = (await getInfo(lightning)).identityPubkey;
-  const interceptor = startHtlcInterceptor(router);
+  const interceptor = startHtlcInterceptor(router, lightning);
   const unregisterHtlcHandler = interceptor.registerHandler(
     createOnDemandChannelHtlcHandler(db, lightning),
   );
@@ -54,8 +55,10 @@ const OnDemandChannel = async function (app, { lightning, router }) {
   // continues draining durable automatic-opening work in the background.
   if (config.get<string>("env") !== "test") {
     const stopChannelOpenRecovery = startChannelOpenRecovery(db, lightning);
+    const stopDeadlineGuard = startSettlementDeadlineGuard(db, lightning);
     app.addHook("onClose", async () => {
       stopChannelOpenRecovery();
+      stopDeadlineGuard();
     });
   }
 } as FastifyPluginAsync<{ lightning: Client; router: Client }>;

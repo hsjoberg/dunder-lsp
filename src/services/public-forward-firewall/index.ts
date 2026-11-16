@@ -113,7 +113,7 @@ const PublicForwardFirewall = async function (app, { lightning, router }) {
     return;
   }
 
-  const unregister = startHtlcInterceptor(router).registerHandler(
+  const unregister = startHtlcInterceptor(router, lightning).registerHandler(
     createPublicPublicForwardBlocker(lightning),
   );
 
