@@ -96,6 +96,9 @@ describe("signed requests", () => {
     ["for another service", { domain: "lightning-box.example" }, /different service/],
     ["for another endpoint", { endpoint: "/ondemand-channel/claim" }, /different endpoint/],
     ["without a nonce", { nonce: "" }, /Invalid signed message/],
+    // lnd would verify "š" (U+0161) as the byte 0x61 ("a"): same signature,
+    // different text for the replay check.
+    ["with non-ASCII text", { nonce: "š".repeat(16) }, /Invalid signed message/],
   ])("rejects a message %s", async (_name, overrides, reason) => {
     const app = build();
     const response = await post(app, signedBody(overrides));

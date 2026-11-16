@@ -121,8 +121,9 @@ Two things depend on the proxy:
 
 - **Admin login.** When `serverDomain` starts with `https://`, the admin session
   cookie is marked `Secure` and is only set when the request arrived over HTTPS,
-  which Dunder learns from the proxy's `X-Forwarded-Proto: https` header.
-  Without it, admin login silently fails.
+  which Dunder learns from the proxy's `X-Forwarded-Proto: https` header. The
+  header is only believed from addresses listed in `trustProxy`. Without both,
+  admin login silently fails.
 - **Per-IP rate limit.** Every request reaches Dunder from the proxy, so Dunder
   sees the proxy's address as the client. `trustProxy` tells Dunder which
   addresses are your proxy; for requests from those, it takes the real client

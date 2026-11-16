@@ -1,5 +1,11 @@
 import build from "../../../src/app";
+import getDb from "../../../src/db/db";
+import { createAdmin } from "../../../src/db/admin";
 import { BoundedSessionStore } from "../../../src/services/admin/session-store";
+
+// HTTPS arrives through a reverse proxy, which Dunder must trust
+// (`trustProxy`) to believe its X-Forwarded-Proto header.
+const buildBehindProxy = () => build({ trustProxy: true });
 
 function fakeSession(authenticated = false) {
   return { get: (key: string) => (key === "authenticated" ? authenticated : undefined) } as any;
@@ -66,7 +72,7 @@ describe("BoundedSessionStore", () => {
 
 describe("admin session cookie", () => {
   test("is Secure, HttpOnly, SameSite=Strict and scoped to /admin", async () => {
-    const app = build();
+    const app = buildBehindProxy();
     await app.ready();
 
     const response = await app.inject({
@@ -86,7 +92,7 @@ describe("admin session cookie", () => {
   });
 
   test("is not set over plain HTTP when Dunder is configured for HTTPS", async () => {
-    const app = build();
+    const app = buildBehindProxy();
     await app.ready();
 
     const response = await app.inject({ method: "GET", url: "/admin/api/test" });
@@ -96,7 +102,7 @@ describe("admin session cookie", () => {
   });
 
   test("is not created for requests that do not use the session", async () => {
-    const app = build();
+    const app = buildBehindProxy();
     await app.ready();
 
     const response = await app.inject({
@@ -108,5 +114,47 @@ describe("admin session cookie", () => {
     expect(response.statusCode).toBe(403);
     expect(response.headers["set-cookie"]).toBeUndefined();
     await app.close();
+  });
+
+  test("no longer works after logout", async () => {
+    const db = await getDb(true);
+    await createAdmin(db, "abcdef12345", "Session test");
+    // Log in by marking the stored session as an authenticated admin.
+    let session: any;
+    const originalSet = BoundedSessionStore.prototype.set;
+    const spy = jest.spyOn(BoundedSessionStore.prototype, "set").mockImplementation(function (
+      this: BoundedSessionStore,
+      sessionId,
+      stored,
+      callback,
+    ) {
+      session = stored;
+      return originalSet.call(this, sessionId, stored, callback);
+    });
+    const app = buildBehindProxy();
+    try {
+      await app.ready();
+      const initial = await app.inject({
+        url: "/admin/api/test",
+        headers: { "x-forwarded-proto": "https" },
+      });
+      spy.mockRestore();
+      session.set("authenticated", true);
+      session.set("pubkey", "abcdef12345");
+      const headers = {
+        cookie: String(initial.headers["set-cookie"]).split(";")[0],
+        "x-forwarded-proto": "https",
+      };
+      expect((await app.inject({ url: "/admin/api/admins", headers })).statusCode).toBe(200);
+
+      const logout = await app.inject({ url: "/admin/api/logout", headers });
+      expect(logout.statusCode).toBe(200);
+
+      expect((await app.inject({ url: "/admin/api/admins", headers })).statusCode).toBe(403);
+    } finally {
+      spy.mockRestore();
+      await app.close();
+      await db.close();
+    }
   });
 });

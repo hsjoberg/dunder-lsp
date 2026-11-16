@@ -128,6 +128,12 @@ export function parseSignedEnvelope(
   if (pubkey !== undefined && (typeof pubkey !== "string" || pubkey.length > 130)) {
     return { ok: false, reason: "Invalid request." };
   }
+  // verifyMessage sends lnd one byte per character (the low byte), so two
+  // different non-ASCII texts can verify with the same signature and get past
+  // the replay check. Signed messages are plain JSON; only ASCII is needed.
+  if (!/^[\x00-\x7f]*$/.test(message)) {
+    return { ok: false, reason: "Invalid signed message." };
+  }
 
   let signed: unknown;
   try {

@@ -29,8 +29,9 @@ const Admin = async function (app, { lightning, router }) {
   app.register(fastifySession, {
     cookie: {
       // When Dunder is configured for HTTPS the cookie is marked Secure. Behind a
-      // TLS-terminating reverse proxy, the proxy must send `X-Forwarded-Proto: https`,
-      // otherwise @fastify/session refuses to set a Secure cookie.
+      // TLS-terminating reverse proxy, the proxy must send `X-Forwarded-Proto: https`
+      // and be listed in `trustProxy`, otherwise @fastify/session refuses to set a
+      // Secure cookie.
       secure: isHttpsDeployment(),
       httpOnly: true,
       sameSite: "strict",

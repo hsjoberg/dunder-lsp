@@ -19,7 +19,11 @@ import { bytesToHexString, sha256Buffer } from "../../../../src/utils/common";
 import { MSAT } from "../../../../src/utils/constants";
 import { createPreimage } from "./register-helpers";
 
-import { __MOCK_BLOCK_HEIGHT, openChannelSync } from "../../../../mocks/utils/lnd-api";
+import {
+  __MOCK_BLOCK_HEIGHT,
+  checkPeerConnected,
+  openChannelSync,
+} from "../../../../mocks/utils/lnd-api";
 
 const PUBKEY = "abcdef12345";
 const SETTLE = routerrpc.ResolveHoldForwardAction.SETTLE;
@@ -266,12 +270,12 @@ describe("held multi-part payments", () => {
 
     expect(a.actions).toEqual([SETTLE]);
     expect(b.actions).toEqual([SETTLE]);
-    expect(
-      (await getHtlcSettlementByCircuitKey(db, "956575116245991424", "5"))?.amountSat,
-    ).toBe(4_000);
-    expect(
-      (await getHtlcSettlementByCircuitKey(db, "956575116245991425", "5"))?.amountSat,
-    ).toBe(6_000);
+    expect((await getHtlcSettlementByCircuitKey(db, "956575116245991424", "5"))?.amountSat).toBe(
+      4_000,
+    );
+    expect((await getHtlcSettlementByCircuitKey(db, "956575116245991425", "5"))?.amountSat).toBe(
+      6_000,
+    );
   });
   test("an HTLC too close to lnd's auto-fail height is failed instead of held", async () => {
     const { handler, htlc } = await setup();
@@ -304,6 +308,41 @@ describe("held multi-part payments", () => {
     const part = writer();
     await handler(htlc(10_000, "103", "1", { incomingExpiry: __MOCK_BLOCK_HEIGHT + 19 }), part);
     expect(part.actions).toEqual([FAIL]);
+  });
+
+  test("a second full payment that raced past the paid check is failed back", async () => {
+    const { db, channelId, handler, htlc } = await setup({ amountSat: 10_000 });
+    // Hold the second payment's handler after it has read "not paid".
+    let release!: () => void;
+    let reached!: () => void;
+    const reachedPeerCheck = new Promise<void>((resolve) => (reached = resolve));
+    (checkPeerConnected as jest.Mock).mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          reached();
+          release = () => resolve(true);
+        }),
+    );
+    const second = writer();
+    const secondHandled = handler(htlc(10_000, "108", "1"), second);
+    await reachedPeerCheck;
+
+    // The first payment is collected, recorded and settled meanwhile.
+    const first = writer();
+    await handler(htlc(10_000, "107", "1"), first);
+    await waitFor(() => first.actions.length > 0);
+    expect(first.actions).toEqual([SETTLE]);
+
+    release();
+    await secondHandled;
+    await waitFor(() => second.actions.length > 0);
+    // Failed back to the payer, not settled and not recorded.
+    expect(second.actions).toEqual([FAIL]);
+    const rows = await db.all(
+      "SELECT incomingChannelId FROM htlcSettlement WHERE channelId = ?",
+      channelId,
+    );
+    expect(rows).toEqual([{ incomingChannelId: "107" }]);
   });
 
   test("a wrong payment hash is failed with a code lnd accepts", async () => {
