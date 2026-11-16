@@ -9,6 +9,7 @@ import build from "../../../src/app";
 import getDb from "../../../src/db/db";
 import { createAdmin } from "../../../src/db/admin";
 import { bytesToHexString } from "../../../src/utils/common";
+import { MAX_LOGIN_SOCKETS } from "../../../src/services/admin/api/login";
 
 const HTTPS = { "x-forwarded-proto": "https" };
 
@@ -115,6 +116,61 @@ describe("admin LNURL-auth login", () => {
       const code = await new Promise<number>((resolve) => socket.once("close", resolve));
       expect(code).toBe(1008);
     } finally {
+      await app.close();
+    }
+  });
+
+  test("closes a login WebSocket that sends an oversized message", async () => {
+    const app = build();
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const port = (app.server.address() as AddressInfo).port;
+    try {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/admin/api/login-ws`, {
+        headers: { origin: `http://127.0.0.1:${port}` },
+      });
+      await new Promise((resolve) => socket.once("open", resolve));
+      const closed = new Promise<number>((resolve) => socket.once("close", resolve));
+      socket.send("x".repeat(2048));
+      expect(await closed).toBe(1009); // Message too big
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("refuses login WebSockets beyond the limit", async () => {
+    const app = build();
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const port = (app.server.address() as AddressInfo).port;
+    const open = () =>
+      new WebSocket(`ws://127.0.0.1:${port}/admin/api/login-ws`, {
+        headers: { origin: `http://127.0.0.1:${port}` },
+      });
+    const sockets: any[] = [];
+    try {
+      for (let i = 0; i < MAX_LOGIN_SOCKETS; i++) {
+        const socket = open();
+        sockets.push(socket);
+        await new Promise((resolve) => socket.once("open", resolve));
+      }
+      const extra = open();
+      sockets.push(extra);
+      expect(await new Promise<number>((resolve) => extra.once("close", resolve))).toBe(1013);
+
+      // A slot frees up when a login socket closes.
+      const first = sockets[0];
+      await new Promise((resolve) => {
+        first.once("close", resolve);
+        first.close();
+      });
+      // Let the server handle the close as well.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const next = open();
+      sockets.push(next);
+      await new Promise((resolve) => next.once("open", resolve));
+      next.send("GET_LNURL");
+      expect(await nextMessage(next)).toHaveProperty("lnurlAuth");
+    } finally {
+      sockets.forEach((socket) => socket.terminate());
       await app.close();
     }
   });

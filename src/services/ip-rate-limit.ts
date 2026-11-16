@@ -5,8 +5,11 @@ const DEFAULT_REQUESTS_PER_MINUTE = 120;
 const WINDOW_MS = 60_000;
 const MAX_TRACKED_ADDRESSES = 100_000;
 
-/** Public, unauthenticated routes. The admin interface has its own login. */
-const LIMITED_PREFIXES = ["/ondemand-channel/", "/getInfo", "/estimateFee"];
+/**
+ * Public, unauthenticated routes, including the admin login (login,
+ * login-ws, login-complete). The rest of the admin interface requires a login.
+ */
+const LIMITED_PREFIXES = ["/ondemand-channel/", "/getInfo", "/estimateFee", "/admin/api/login"];
 
 function getLimitPerMinute() {
   return config.has("ipRateLimitPerMinute")

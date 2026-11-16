@@ -48,7 +48,9 @@ const Admin = async function (app, { lightning, router }) {
     }),
     secret: bytesToHexString(await generateBytes(32)),
   });
-  app.register(fastifyWebsocket);
+  // The login protocol only sends short text messages; ws would otherwise
+  // accept messages of up to 100 MB.
+  app.register(fastifyWebsocket, { options: { maxPayload: 1024 } });
 
   app.register(require("./api/index"), {
     prefix: "/api",

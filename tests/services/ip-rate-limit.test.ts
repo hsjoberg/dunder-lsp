@@ -35,8 +35,11 @@ describe("per-IP rate limit", () => {
 
       // Another client is unaffected.
       expect((await app.inject({ url: "/getInfo", headers: fromB })).statusCode).toBe(200);
-      // So is the admin interface.
+      // So is the admin interface, apart from the login endpoints.
       expect((await app.inject({ url: "/admin/api/test", headers: fromA })).statusCode).toBe(200);
+      const login = { method: "POST" as const, url: "/admin/api/login-complete", headers: fromB };
+      expect((await app.inject(login)).statusCode).toBe(403);
+      expect((await app.inject(login)).statusCode).toBe(429);
     } finally {
       restore();
       await app.close();

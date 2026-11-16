@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto";
 import { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { Client } from "@grpc/grpc-js";
 import { SessionStore } from "@fastify/session";
@@ -28,6 +29,11 @@ interface IUser {
   k1: string;
 }
 const users: Map<WebSocket, IUser> = new Map();
+
+// Login WebSockets can be opened by anyone before logging in, so their number
+// and lifetime are bounded. A login takes a minute or two.
+export const MAX_LOGIN_SOCKETS = 100;
+const LOGIN_SOCKET_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
  * Logins approved by a wallet, waiting for the browser to complete them.
@@ -78,16 +84,22 @@ const AdminLogin = async function (app, { lightning, router }) {
   app.get(
     "/login-ws",
     { websocket: true },
-    async (socket: WebSocket, request: FastifyRequest) => {
+    (socket: WebSocket, request: FastifyRequest) => {
       if (!isSameOrigin(request)) {
         socket.close(1008, "Origin not allowed");
+        return;
+      }
+      if (users.size >= MAX_LOGIN_SOCKETS) {
+        socket.close(1013, "Too many logins in progress");
         return;
       }
 
       const serverDomain = config.get<string>("serverDomain");
 
       const sessionId = request.session.sessionId;
-      const k1 = bytesToHexString(await generateBytes(32));
+      // Synchronous, so the message handler below is attached before any
+      // message can arrive.
+      const k1 = randomBytes(32).toString("hex");
 
       users.set(socket, {
         sessionId: sessionId,
@@ -117,7 +129,14 @@ const AdminLogin = async function (app, { lightning, router }) {
         }
       });
 
+      const timeout = setTimeout(
+        () => socket.close(1000, "Login timed out"),
+        LOGIN_SOCKET_TIMEOUT_MS,
+      );
+      timeout.unref?.();
+
       socket.on("close", () => {
+        clearTimeout(timeout);
         users.delete(socket);
       });
     },
