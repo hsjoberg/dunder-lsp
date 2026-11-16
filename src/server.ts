@@ -11,7 +11,7 @@ const port = Number.parseInt(host.split(":")[1] ?? "8080");
 
 const server = app();
 
-server.listen(port, domain, (err, address) => {
+server.listen({ port, host: domain }, (err, address) => {
   if (err) {
     console.error(err);
     process.exit(1);

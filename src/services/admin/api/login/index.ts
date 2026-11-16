@@ -2,7 +2,7 @@ import { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { Client } from "@grpc/grpc-js";
 import { SessionStore } from "@fastify/session";
 import secp256k1 from "secp256k1";
-import { SocketStream } from "@fastify/websocket";
+import type { WebSocket } from "ws";
 import config from "config";
 
 import {
@@ -22,12 +22,12 @@ export interface IErrorResponse {
 
 interface IUser {
   sessionId: string;
-  connection: SocketStream;
+  socket: WebSocket;
   sessionStore: SessionStore;
   session: FastifyRequest["session"];
   k1: string;
 }
-const users: Map<SocketStream, IUser> = new Map();
+const users: Map<WebSocket, IUser> = new Map();
 
 /**
  * Logins approved by a wallet, waiting for the browser to complete them.
@@ -78,9 +78,9 @@ const AdminLogin = async function (app, { lightning, router }) {
   app.get(
     "/login-ws",
     { websocket: true },
-    async (connection: SocketStream, request: FastifyRequest) => {
+    async (socket: WebSocket, request: FastifyRequest) => {
       if (!isSameOrigin(request)) {
-        connection.socket.close(1008, "Origin not allowed");
+        socket.close(1008, "Origin not allowed");
         return;
       }
 
@@ -89,26 +89,26 @@ const AdminLogin = async function (app, { lightning, router }) {
       const sessionId = request.session.sessionId;
       const k1 = bytesToHexString(await generateBytes(32));
 
-      users.set(connection, {
+      users.set(socket, {
         sessionId: sessionId,
-        connection,
+        socket,
         sessionStore: request.sessionStore,
         session: request.session,
         k1,
       });
 
-      connection.socket.on("message", (message: any) => {
+      socket.on("message", (message: any) => {
         const text = message.toString();
         if (text === "GET_LNURL") {
           const bech32Data = createLnUrlAuth(k1, `${serverDomain}/admin/api/login`);
 
-          connection.socket.send(
+          socket.send(
             JSON.stringify({
               lnurlAuth: bech32Data,
             }),
           );
         } else {
-          connection.socket.send(
+          socket.send(
             JSON.stringify({
               status: "ERROR",
               reason: "Unknown request",
@@ -117,8 +117,8 @@ const AdminLogin = async function (app, { lightning, router }) {
         }
       });
 
-      connection.socket.on("close", () => {
-        users.delete(connection);
+      socket.on("close", () => {
+        users.delete(socket);
       });
     },
   );
@@ -180,7 +180,7 @@ const AdminLogin = async function (app, { lightning, router }) {
     for (const [_, user] of u) {
       pendingLogins.set(user.sessionId, { pubkey: key, expiresAt: now + PENDING_LOGIN_TTL_MS });
       user.k1 = bytesToHexString(await generateBytes(32));
-      user.connection.socket.send(
+      user.socket.send(
         JSON.stringify({
           status: "OK",
         }),
@@ -211,11 +211,10 @@ const AdminLogin = async function (app, { lightning, router }) {
       return error;
     }
 
-    // New session ID at login, so a session ID seen before login is useless.
+    // New session ID at login, so a session ID seen before login is useless:
+    // @fastify/session keeps the stored session under the same store key but
+    // no longer accepts a cookie with the old ID.
     await request.session.regenerate();
-    await new Promise<void>((resolve) =>
-      request.sessionStore.destroy(previousSessionId, () => resolve()),
-    );
     request.session.set<any>("authenticated", true);
     request.session.set<any>("pubkey", pending.pubkey);
     return { status: "OK" };

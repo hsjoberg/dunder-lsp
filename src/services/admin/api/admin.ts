@@ -19,7 +19,7 @@ import {
   LnUrlAuthQuerystring,
 } from "../../../utils/common";
 import { IErrorResponse } from "../../../services/ondemand-channel";
-import { SocketStream } from "@fastify/websocket";
+import type { WebSocket } from "ws";
 import { requireAuthenticatedAdmin } from "./auth";
 
 interface ICreateAdminLnUrlAuthRequests {
@@ -216,7 +216,7 @@ const AdminAdmin = async function (app, { lightning, router }) {
   app.get(
     "/create-admin-lnurl-auth-ws",
     { websocket: true },
-    async (connection: SocketStream, request: FastifyRequest) => {
+    async (socket: WebSocket, request: FastifyRequest) => {
       const session = request.session as any;
       const sessionPubkey = session.get("pubkey");
       if (
@@ -225,7 +225,7 @@ const AdminAdmin = async function (app, { lightning, router }) {
         !(await checkAdminPubkey(db, sessionPubkey))
       ) {
         console.log("No session");
-        connection.socket.close();
+        socket.close();
         return;
       }
 
@@ -251,14 +251,14 @@ const AdminAdmin = async function (app, { lightning, router }) {
       });
 
       promise.then((pubkey) => {
-        connection.socket.send(
+        socket.send(
           JSON.stringify({
             pubkey,
           }),
         );
       });
 
-      connection.socket.send(
+      socket.send(
         JSON.stringify({
           lnurlAuth: bech32Data,
         }),

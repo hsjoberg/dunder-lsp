@@ -29,6 +29,12 @@ function isAuthenticated(session: StoredSession) {
   }
 }
 
+// Same as @fastify/session's internal getSessionGeneration: a session records
+// the ID it was generated under, so a regenerated session can be told apart.
+function sessionGeneration(session: StoredSession, sessionId: string): string {
+  return (session as any)?.__fastifySessionMetadata?.generation ?? sessionId;
+}
+
 /**
  * In-memory session store with idle and absolute expiry and a size cap.
  *
@@ -50,6 +56,37 @@ export class BoundedSessionStore extends EventEmitter {
   }
 
   set(sessionId: string, session: StoredSession, callback: Callback) {
+    this.store(sessionId, session);
+    callback();
+  }
+
+  /**
+   * Saves a session that was loaded from the store, only if the stored copy is
+   * still the one it was loaded from. A session destroyed or regenerated in the
+   * meantime (logout, login) is not brought back.
+   */
+  compareAndSet(
+    sessionId: string,
+    expectedGeneration: string,
+    session: StoredSession,
+    callback: Callback,
+  ) {
+    const entry = this.sessions.get(sessionId);
+    if (
+      !entry ||
+      entry.expiresAt <= this.now() ||
+      sessionGeneration(entry.session, sessionId) !== expectedGeneration
+    ) {
+      const error: NodeJS.ErrnoException = new Error("The session does not exist or has changed");
+      error.code = "ENOENT";
+      callback(error);
+      return;
+    }
+    this.store(sessionId, session);
+    callback();
+  }
+
+  private store(sessionId: string, session: StoredSession) {
     const now = this.now();
     const existing = this.sessions.get(sessionId);
     const createdAt = existing?.createdAt ?? now;
@@ -61,7 +98,6 @@ export class BoundedSessionStore extends EventEmitter {
       expiresAt: Math.min(now + this.options.idleTimeoutMs, createdAt + this.options.absoluteTimeoutMs),
     });
     this.sweep(now);
-    callback();
   }
 
   get(sessionId: string, callback: GetCallback) {
