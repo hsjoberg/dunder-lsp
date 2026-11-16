@@ -187,6 +187,56 @@ export function setNodeFrozen(node: RegtestNode, frozen: boolean) {
   }
 }
 
+function docker(args: string[], allowFailure = false) {
+  const result = spawnSync("docker", args, { encoding: "utf8" });
+  if (result.status !== 0 && !allowFailure) {
+    throw new Error(`docker ${args.join(" ")} failed: ${result.stderr}`);
+  }
+  return result;
+}
+
+const DEFAULT_NETWORK = "dunder-regtest_default";
+const ISOLATED_NETWORK = "dunder-regtest_isolated";
+const container = (node: RegtestNode | "bitcoind") => `dunder-regtest-${node}-1`;
+
+/**
+ * Restarts a node on a network of its own where only bitcoind is reachable:
+ * it follows the chain but can't talk to the other lnd nodes. Its gRPC port
+ * isn't reachable from the host meanwhile; use lncliInContainer.
+ */
+export function isolateNode(node: RegtestNode) {
+  docker(["kill", container(node)], true);
+  docker(["network", "create", ISOLATED_NETWORK], true);
+  docker(
+    ["network", "connect", "--alias", "bitcoind", ISOLATED_NETWORK, container("bitcoind")],
+    true,
+  );
+  docker(["network", "disconnect", DEFAULT_NETWORK, container(node)]);
+  docker(["network", "connect", ISOLATED_NETWORK, container(node)]);
+  docker(["start", container(node)]);
+}
+
+/** Undoes isolateNode. */
+export function rejoinNode(node: RegtestNode) {
+  docker(["network", "disconnect", ISOLATED_NETWORK, container(node)], true);
+  docker(["network", "connect", "--alias", node, DEFAULT_NETWORK, container(node)], true);
+  docker(["network", "disconnect", ISOLATED_NETWORK, container("bitcoind")], true);
+  docker(["network", "rm", ISOLATED_NETWORK], true);
+  // Published ports (gRPC from the host) are only set up when a container
+  // starts, so they are gone after the network change until a restart.
+  docker(["restart", container(node)]);
+}
+
+/** Runs lncli inside a node's container; returns its JSON output, or null on failure. */
+export function lncliInContainer(node: RegtestNode, args: string[]): any {
+  const result = docker(["exec", container(node), "lncli", "--network=regtest", ...args], true);
+  try {
+    return result.status === 0 ? JSON.parse(result.stdout) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** SendToRouteV2: sends one HTLC along the given route, exactly as built. */
 export function sendToRoute(router: Client, request: routerrpc.ISendToRouteRequest) {
   return unary(
