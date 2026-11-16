@@ -401,11 +401,13 @@ export const createOnDemandChannelHtlcHandler = (
   const htlcId = request.incomingCircuitKey?.htlcId?.toString() ?? "0";
   const circuitKey = `${incomingChannelId}:${htlcId}`;
   const amountMsat = BigInt(request.outgoingAmountMsat.toString());
+  const incomingAmountMsat = BigInt(request.incomingAmountMsat.toString());
 
   console.log("Intercepted HTLC for on-demand channel", {
     channelId,
     circuitKey,
     amountMsat: amountMsat.toString(),
+    incomingAmountMsat: incomingAmountMsat.toString(),
     outgoingExpiry: request.outgoingExpiry,
   });
 
@@ -427,6 +429,17 @@ export const createOnDemandChannelHtlcHandler = (
     writer.respond(routerrpc.ResolveHoldForwardAction.RESUME, request.incomingCircuitKey);
     return handled();
   };
+
+  // The outgoing amount comes from the payer's onion; only the incoming amount
+  // was actually received. lnd checks incoming >= outgoing + fee on the
+  // outgoing channel, but the fake channel ID has none, so an intercepted HTLC
+  // reaches us unchecked. Without this, a payer could send 1 sat with an onion
+  // that says to forward the full amount, and Dunder would pay out the full
+  // amount. Honest payments carry at least the outgoing amount (the route
+  // hint's fee comes on top).
+  if (incomingAmountMsat < amountMsat) {
+    return fail("Incoming amount is below the amount to forward");
+  }
 
   // Requests stored before preimage validation existed may hold a preimage lnd
   // would reject; never send it in a SETTLE action.

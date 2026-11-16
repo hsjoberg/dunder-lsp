@@ -152,6 +152,25 @@ export async function resetMissionControl(router: Client) {
   );
 }
 
+export function queryRoutes(lightning: Client, request: lnrpc.IQueryRoutesRequest) {
+  return unary(
+    lightning,
+    "/lnrpc.Lightning/QueryRoutes",
+    lnrpc.QueryRoutesRequest.encode(request).finish(),
+    lnrpc.QueryRoutesResponse.decode,
+  );
+}
+
+/** SendToRouteV2: sends one HTLC along the given route, exactly as built. */
+export function sendToRoute(router: Client, request: routerrpc.ISendToRouteRequest) {
+  return unary(
+    router,
+    "/routerrpc.Router/SendToRouteV2",
+    routerrpc.SendToRouteRequest.encode(request).finish(),
+    lnrpc.HTLCAttempt.decode,
+  );
+}
+
 /** SendPaymentV2; resolves with the final payment state. */
 export function sendPayment(
   router: Client,

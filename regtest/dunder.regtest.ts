@@ -26,9 +26,11 @@ import {
   getInfo,
   listChannels,
   mine,
+  queryRoutes,
   resetMissionControl,
   runChannelAcceptor,
   sendPayment,
+  sendToRoute,
   signMessage,
   waitFor,
 } from "./lnd";
@@ -413,6 +415,75 @@ describe("Dunder on regtest", () => {
         walletPubkey,
       );
     }
+  });
+
+  test("an HTLC whose onion forwards more than the HTLC carries is not settled", async () => {
+    const amountSat = amount(2);
+    const { preimage, registration } = await register(amountSat);
+    const paymentRequest = await createInvoice(preimage, registration, amountSat);
+    const decoded = await decodePayReq(payer.lightning, paymentRequest);
+
+    const { routes } = await queryRoutes(payer.lightning, {
+      pubKey: walletPubkey,
+      amt: Long.fromValue(amountSat),
+      finalCltvDelta: decoded.cltvExpiry.toNumber(),
+      routeHints: decoded.routeHints,
+      useMissionControl: false,
+    });
+    const route = routes[0] as lnrpc.Route;
+    expect(route.hops.map((hop) => hop.pubKey)).toEqual([lspPubkey, walletPubkey]);
+    const lastHop = route.hops[1] as lnrpc.Hop;
+    expect(Long.fromValue(lastHop.chanId).toString()).toBe(registration.fakeChannelId);
+    lastHop.tlvPayload = true;
+    lastHop.mppRecord = {
+      paymentAddr: decoded.paymentAddr,
+      totalAmtMsat: Long.fromValue(amountSat).mul(1000),
+    };
+    console.log("Honest route", {
+      htlcToLspMsat: Long.fromValue(route.totalAmtMsat).toString(),
+      lspForwardsMsat: Long.fromValue(route.hops[0].amtToForwardMsat ?? 0).toString(),
+    });
+
+    // The forgery: the HTLC sent to the LSP carries 1 sat, while the LSP's
+    // onion payload still tells it to forward the full amount over the fake
+    // channel ID. The payer builds the onion, so nothing stops it doing this.
+    route.totalAmtMsat = Long.fromValue(1000);
+    route.totalAmt = Long.fromValue(1);
+    route.totalFeesMsat = Long.fromValue(0);
+    route.totalFees = Long.fromValue(0);
+
+    const payerBalance = async () =>
+      (await listChannels(payer.lightning)).channels
+        .filter((channel) => channel.remotePubkey === lspPubkey)
+        .reduce((sum, channel) => sum + Long.fromValue(channel.localBalance ?? 0).toNumber(), 0);
+    const balanceBefore = await payerBalance();
+
+    const attempt = await sendToRoute(payer.router, {
+      paymentHash: Buffer.from(decoded.paymentHash, "hex"),
+      route,
+    });
+
+    const db = await getDb();
+    const settlements = await db.all<{ amountSat: number }[]>(
+      "SELECT amountSat FROM htlcSettlement WHERE channelId = ?",
+      registration.fakeChannelId,
+    );
+    console.log("Forged HTLC result", {
+      attempt: HTLCStatus[attempt.status],
+      failure: attempt.failure ? FailureCode[attempt.failure.code ?? 0] : null,
+      htlcSentMsat: Long.fromValue(attempt.route?.totalAmtMsat ?? 0).toString(),
+      payerPaidSat: balanceBefore - (await payerBalance()),
+      dunderRecordedSat: settlements.reduce((sum, row) => sum + row.amountSat, 0),
+    });
+
+    if (attempt.status === HTLCStatus.SUCCEEDED) {
+      // Show the whole loss: Dunder pays the forged amount out to the wallet.
+      const { pushAmountSat } = await expectPayout(registration.fakeChannelId);
+      console.log("Dunder pushed to the wallet (sat):", pushAmountSat);
+    }
+
+    expect(HTLCStatus[attempt.status]).toBe("FAILED");
+    expect(settlements).toEqual([]);
   });
 
   test("the interceptor stream never dropped during the run", () => {
