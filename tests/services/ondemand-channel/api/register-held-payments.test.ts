@@ -77,9 +77,11 @@ async function setup(
       autoFailHeight: __MOCK_BLOCK_HEIGHT + 187,
     },
     paymentHash: Uint8Array = sha256Buffer(preimage),
+    incomingAmountMsat: Long = Long.fromValue(amountSat).mul(MSAT),
   ) =>
     routerrpc.ForwardHtlcInterceptRequest.create({
       outgoingAmountMsat: Long.fromValue(amountSat).mul(MSAT),
+      incomingAmountMsat,
       incomingCircuitKey: routerrpc.CircuitKey.create({
         chanId: Long.fromString(chanId, true),
         htlcId: Long.fromString(htlcId, true),
@@ -312,5 +314,26 @@ describe("held multi-part payments", () => {
     // No failure code: lnd uses TEMPORARY_CHANNEL_FAILURE. lnd rejects
     // INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS and drops the interceptor stream.
     expect(part.failureCodes).toEqual([undefined]);
+  });
+
+  test("an HTLC carrying less than its onion says to forward is failed", async () => {
+    const { db, handler, htlc } = await setup({ amountSat: 20_000 });
+    const part = writer();
+    // 1 sat received, 20 000 sat to forward according to the payer's onion.
+    await handler(htlc(20_000, "105", "1", undefined, undefined, Long.fromValue(1_000)), part);
+    expect(part.actions).toEqual([FAIL]);
+    expect(await getHtlcSettlementByCircuitKey(db, "105", "1")).toBeUndefined();
+    expect(openChannelSync).not.toHaveBeenCalled();
+  });
+
+  test("an HTLC carrying more than it forwards (the route hint fee) is accepted", async () => {
+    const { handler, htlc } = await setup({ amountSat: 20_000 });
+    const part = writer();
+    await handler(
+      htlc(20_000, "106", "1", undefined, undefined, Long.fromValue(20_000_051)),
+      part,
+    );
+    await waitFor(() => part.actions.length > 0);
+    expect(part.actions).toEqual([SETTLE]);
   });
 });

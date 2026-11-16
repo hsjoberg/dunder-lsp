@@ -34,6 +34,7 @@ export function createForwardHtlcInterceptRequest(
 ) {
   return routerrpc.ForwardHtlcInterceptRequest.encode({
     outgoingAmountMsat: Long.fromValue(amountSat).mul(MSAT),
+    incomingAmountMsat: Long.fromValue(amountSat).mul(MSAT),
     incomingCircuitKey: routerrpc.CircuitKey.create({
       chanId: incomingChanId,
       htlcId: htlcPart,
