@@ -28,6 +28,7 @@ import {
   checkPeerConnected,
   estimateFee,
   getInfo,
+  listChannels,
   subscribeHtlcEvents,
 } from "../../../utils/lnd-api";
 import { handled, HtlcHandler, HtlcResponseWriter, noDecision } from "../../htlc-interceptor";
@@ -282,11 +283,16 @@ type HeldPart = {
   incomingChannelId: string;
   htlcId: string;
   amountMsat: bigint;
+  incomingAmountMsat: bigint;
+  incomingExpiry: number;
+  /** The incoming channel when the part arrived (unknown if lnd didn't list it). */
+  incomingChannelPoint?: string;
   writer: HtlcResponseWriter;
 };
 
 type HeldPayment = {
   channelId: string;
+  lightning: Client;
   parts: Map<string, HeldPart>;
   state: "COLLECTING" | "SETTLING";
   settleSent: boolean;
@@ -313,8 +319,65 @@ function failHeldPayment(payment: HeldPayment, reason: string) {
   if (heldPayments.get(payment.channelId) === payment) {
     heldPayments.delete(payment.channelId);
   }
-  for (const part of payment.parts.values()) {
-    part.writer.respond(routerrpc.ResolveHoldForwardAction.FAIL, part.incomingCircuitKey);
+  answerHeldParts(
+    payment.lightning,
+    [...payment.parts.values()],
+    routerrpc.ResolveHoldForwardAction.FAIL,
+  ).catch((error) => console.error("Could not answer held parts", error));
+}
+
+/** The channel point of the open channel with this ID (or alias ID), if any. */
+async function findOpenChannelPoint(lightning: Client, chanId: string) {
+  try {
+    const { channels } = await listChannels(lightning);
+    for (const channel of channels as lnrpc.Channel[]) {
+      const ids = [channel.chanId, channel.zeroConfConfirmedScid, ...(channel.aliasScids ?? [])];
+      if (ids.some((id) => id && id.toString() === chanId)) {
+        return channel.channelPoint;
+      }
+    }
+  } catch (error) {
+    console.error("Could not list channels", error);
+  }
+  return undefined;
+}
+
+/**
+ * Answers held parts. A part whose incoming channel has closed while it was
+ * held is left unanswered: lnd ends the interceptor stream over an answer to
+ * it ("edge not found"), and offers the HTLC again as an on-chain HTLC, which
+ * Dunder answers then (SETTLE if it was recorded, nothing otherwise).
+ */
+async function answerHeldParts(
+  lightning: Client,
+  parts: HeldPart[],
+  action: routerrpc.ResolveHoldForwardAction,
+  preimage?: Uint8Array,
+) {
+  let openChannelPoints: Set<string> | null = null;
+  if (parts.some((part) => part.incomingChannelPoint && !part.writer.onChain)) {
+    try {
+      const { channels } = await listChannels(lightning);
+      openChannelPoints = new Set(channels.map((channel) => channel.channelPoint ?? ""));
+    } catch (error) {
+      console.error("Could not list channels; answering held parts anyway", error);
+    }
+  }
+  for (const part of parts) {
+    if (
+      openChannelPoints &&
+      part.incomingChannelPoint &&
+      !part.writer.onChain &&
+      !openChannelPoints.has(part.incomingChannelPoint)
+    ) {
+      console.warn("Not answering a held part whose channel has closed; lnd offers it on-chain", {
+        action: routerrpc.ResolveHoldForwardAction[action],
+        incomingChannelId: part.incomingChannelId,
+        htlcId: part.htlcId,
+      });
+      continue;
+    }
+    part.writer.respond(action, part.incomingCircuitKey, preimage);
   }
 }
 
@@ -458,10 +521,23 @@ export const createOnDemandChannelHtlcHandler = (
     if (recorded.channelId !== channelId) {
       return fail("Circuit key is recorded for a different request");
     }
-    console.warn("HTLC was already recorded for settlement, settling it again", {
-      channelId,
-      circuitKey,
-    });
+    if (writer.onChain) {
+      // The payer has the preimage but never locked the settlement in, and its
+      // channel is now on-chain: a broken peer, or a payer trying to take the
+      // HTLC back after Dunder settled it. SETTLE gives lnd the preimage so it
+      // claims the HTLC on-chain; the payout waits for lnd's final outcome.
+      console.error("A settled HTLC came back on-chain; settling it so lnd claims it", {
+        channelId,
+        circuitKey,
+        amountMsat: amountMsat.toString(),
+        incomingExpiry: request.incomingExpiry,
+      });
+    } else {
+      console.warn("HTLC was already recorded for settlement, settling it again", {
+        channelId,
+        circuitKey,
+      });
+    }
     writer.respond(routerrpc.ResolveHoldForwardAction.SETTLE, request.incomingCircuitKey, preimage);
     return handled();
   }
@@ -481,6 +557,7 @@ export const createOnDemandChannelHtlcHandler = (
   const alreadyPaid = await hasHtlcSettlements(db, channelId);
   const peerConnected = await checkPeerConnected(lightning, channelRequest.pubkey);
   const tooCloseToAutoFail = await isTooCloseToAutoFail(lightning, request);
+  const incomingChannelPoint = await findOpenChannelPoint(lightning, incomingChannelId);
 
   // Everything below runs without awaiting, so the held payment can't change
   // underneath it.
@@ -526,6 +603,7 @@ export const createOnDemandChannelHtlcHandler = (
   if (!payment) {
     const newPayment: HeldPayment = {
       channelId,
+      lightning,
       parts: new Map(),
       state: "COLLECTING",
       settleSent: false,
@@ -545,6 +623,9 @@ export const createOnDemandChannelHtlcHandler = (
     incomingChannelId,
     htlcId,
     amountMsat,
+    incomingAmountMsat,
+    incomingExpiry: request.incomingExpiry,
+    incomingChannelPoint,
     writer,
   });
 
@@ -619,6 +700,8 @@ async function settleHeldPayment(
         htlcId: part.htlcId,
         amountSat: Number(part.amountMsat / MSAT_PER_SAT),
         amountMsat: part.amountMsat.toString(),
+        incomingAmountMsat: part.incomingAmountMsat.toString(),
+        incomingExpiry: part.incomingExpiry,
         settled: 0,
         claimed: 0,
       })),
@@ -633,18 +716,11 @@ async function settleHeldPayment(
   if (heldPayments.get(payment.channelId) === payment) {
     heldPayments.delete(payment.channelId);
   }
-  for (const part of parts) {
-    console.log("Settling part HTLC", {
-      channelId: payment.channelId,
-      incomingChannelId: part.incomingChannelId,
-      htlcId: part.htlcId,
-    });
-    part.writer.respond(
-      routerrpc.ResolveHoldForwardAction.SETTLE,
-      part.incomingCircuitKey,
-      preimage,
-    );
-  }
+  console.log("Settling parts", {
+    channelId: payment.channelId,
+    parts: parts.map((part) => `${part.incomingChannelId}:${part.htlcId}`),
+  });
+  await answerHeldParts(lightning, parts, routerrpc.ResolveHoldForwardAction.SETTLE, preimage);
   console.log("Waiting for lnd to confirm the settlement", {
     channelId: channelRequest.channelId,
   });
@@ -739,7 +815,12 @@ export function startHtlcSettlementTracking(db: Database, lightning: Client, rou
       const incomingChannelId = htlcEvent.incomingChannelId.toString();
       const htlcId = htlcEvent.incomingHtlcId.toString();
 
-      if (htlcEvent.settleEvent || htlcEvent.finalHtlcEvent?.settled === true) {
+      // Only lnd's final outcome counts. The settle event comes as soon as lnd
+      // has *sent* the preimage, before the payer has locked the settlement
+      // in; a payer that stops responding then can still take the HTLC back
+      // on-chain after it expires. The final event comes once the payer has
+      // revoked its old commitment, or once lnd has claimed the HTLC on-chain.
+      if (htlcEvent.finalHtlcEvent?.settled === true) {
         await handleHtlcSettled(db, lightning, incomingChannelId, htlcId);
       } else if (htlcEvent.finalHtlcEvent && htlcEvent.finalHtlcEvent.settled === false) {
         await handleHtlcFailed(db, incomingChannelId, htlcId);

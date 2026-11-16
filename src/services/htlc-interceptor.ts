@@ -1,6 +1,6 @@
 import { Client, ClientDuplexStream } from "@grpc/grpc-js";
 import { lnrpc, routerrpc } from "../proto";
-import { htlcInterceptor } from "../utils/lnd-api";
+import { htlcInterceptor, listChannels } from "../utils/lnd-api";
 
 export type HtlcHandlerResult =
   | { status: "HANDLED" }
@@ -8,6 +8,12 @@ export type HtlcHandlerResult =
 
 export type HtlcResponseWriter = {
   readonly responded: boolean;
+  /**
+   * The HTLC's incoming channel has gone on-chain (force-closed). lnd offers
+   * such an HTLC again so a preimage can be supplied, and accepts only SETTLE
+   * for it; the writer leaves it unanswered for any other action.
+   */
+  readonly onChain?: boolean;
   respond(
     action: routerrpc.ResolveHoldForwardAction,
     incomingCircuitKey: routerrpc.ForwardHtlcInterceptRequest["incomingCircuitKey"],
@@ -27,7 +33,14 @@ type HtlcInterceptorStreamFactory = () => HtlcInterceptorStream;
 type HtlcInterceptorCoordinatorOptions = {
   reconnectDelayMs?: number;
   maxReconnectDelayMs?: number;
+  /** A stream must stay up this long before the reconnect backoff resets. */
+  stableStreamMs?: number;
+  isOnChainOffer?: OnChainOfferCheck;
 };
+
+export type OnChainOfferCheck = (
+  request: routerrpc.ForwardHtlcInterceptRequest,
+) => Promise<boolean> | boolean;
 
 export type StreamResetListener = () => void;
 
@@ -42,6 +55,9 @@ export class HtlcInterceptorCoordinator {
   private readonly attachedStreams = new WeakSet<HtlcInterceptorStream>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
+  private stableTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly stableStreamMs: number;
+  private readonly isOnChainOffer: OnChainOfferCheck;
   private started = false;
   private stopped = false;
   private readonly resetListeners = new Set<StreamResetListener>();
@@ -60,6 +76,8 @@ export class HtlcInterceptorCoordinator {
 
     this.reconnectDelayMs = options.reconnectDelayMs ?? 1_000;
     this.maxReconnectDelayMs = options.maxReconnectDelayMs ?? 30_000;
+    this.stableStreamMs = options.stableStreamMs ?? 30_000;
+    this.isOnChainOffer = options.isOnChainOffer ?? (() => false);
   }
 
   registerHandler(handler: HtlcHandler) {
@@ -133,6 +151,10 @@ export class HtlcInterceptorCoordinator {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    if (this.stableTimer) {
+      clearTimeout(this.stableTimer);
+      this.stableTimer = null;
+    }
 
     this.closeStream();
   }
@@ -150,8 +172,21 @@ export class HtlcInterceptorCoordinator {
     }
     this.attachedStreams.add(stream);
 
+    // Reset the backoff only once the stream has stayed up for a while. lnd
+    // replays held HTLCs as soon as a stream opens, so a stream that lnd keeps
+    // ending (for example over one bad answer) still gets data each time.
+    if (this.stableTimer) {
+      clearTimeout(this.stableTimer);
+    }
+    this.stableTimer = setTimeout(() => {
+      this.stableTimer = null;
+      if (this.stream === stream) {
+        this.reconnectAttempts = 0;
+      }
+    }, this.stableStreamMs);
+    this.stableTimer.unref?.();
+
     stream.on("data", (data) => {
-      this.reconnectAttempts = 0;
       const request = routerrpc.ForwardHtlcInterceptRequest.decode(data);
       this.handle(request, stream).catch((error) => {
         console.error("Unexpected HTLC interceptor error", error);
@@ -214,6 +249,9 @@ export class HtlcInterceptorCoordinator {
     stream.removeAllListeners?.("error");
     stream.removeAllListeners?.("end");
     stream.removeAllListeners?.("close");
+    // Cancelling makes the stream emit a CANCELLED error; without a listener
+    // that would be an unhandled error event.
+    stream.on?.("error", () => undefined);
     this.attachedStreams.delete(stream);
     stream.cancel?.();
     this.notifyStreamReset();
@@ -228,7 +266,13 @@ export class HtlcInterceptorCoordinator {
       return;
     }
 
-    const writer = new StreamHtlcResponseWriter(responseStream);
+    let onChain = false;
+    try {
+      onChain = await this.isOnChainOffer(request);
+    } catch (error) {
+      console.error("Could not tell whether an intercepted HTLC is on-chain", error);
+    }
+    const writer = new StreamHtlcResponseWriter(responseStream, onChain);
 
     for (const handler of this.handlers) {
       try {
@@ -280,7 +324,10 @@ const LND_ACCEPTED_FAILURE_CODES = new Set<lnrpc.Failure.FailureCode>([
 class StreamHtlcResponseWriter implements HtlcResponseWriter {
   private didRespond = false;
 
-  constructor(private readonly stream: ClientDuplexStream<any, any>) {}
+  constructor(
+    private readonly stream: ClientDuplexStream<any, any>,
+    readonly onChain = false,
+  ) {}
 
   get responded() {
     return this.didRespond;
@@ -301,6 +348,18 @@ class StreamHtlcResponseWriter implements HtlcResponseWriter {
       return;
     }
     this.didRespond = true;
+
+    if (this.onChain && action !== routerrpc.ResolveHoldForwardAction.SETTLE) {
+      // lnd rejects anything but SETTLE for an on-chain HTLC and ends the
+      // stream over it, and then offers the HTLC again on every new stream.
+      // Unanswered, it stays with lnd until it expires.
+      console.warn("Leaving an on-chain HTLC unanswered (lnd accepts only SETTLE for it)", {
+        action: routerrpc.ResolveHoldForwardAction[action],
+        chanId: incomingCircuitKey?.chanId?.toString(),
+        htlcId: incomingCircuitKey?.htlcId?.toString(),
+      });
+      return;
+    }
 
     if (
       action === routerrpc.ResolveHoldForwardAction.FAIL &&
@@ -326,11 +385,60 @@ class StreamHtlcResponseWriter implements HtlcResponseWriter {
   }
 }
 
+/**
+ * Tells whether lnd offers an HTLC from a channel that went on-chain. Both
+ * signs must agree: lnd (0.21) sets the auto-fail height to the incoming
+ * expiry for such an offer, 13 blocks earlier for an ordinary one, and the
+ * incoming channel is no longer open. The auto-fail check comes first, so
+ * ordinary forwards need no lnd call; the open channels are then reloaded,
+ * at most once a second.
+ */
+export function createOnChainOfferCheck(lightning: Client, now = Date.now): OnChainOfferCheck {
+  let openChannelIds = new Set<string>();
+  let loadedAt = -Infinity;
+  let loading: Promise<void> | null = null;
+
+  const load = async () => {
+    const { channels } = await listChannels(lightning);
+    const ids = new Set<string>();
+    for (const channel of channels) {
+      for (const id of [channel.chanId, channel.zeroConfConfirmedScid, ...(channel.aliasScids ?? [])]) {
+        if (id && id.toString() !== "0") {
+          ids.add(id.toString());
+        }
+      }
+    }
+    openChannelIds = ids;
+    loadedAt = now();
+  };
+
+  return async (request) => {
+    if (request.autoFailHeight <= 0 || request.autoFailHeight !== request.incomingExpiry) {
+      return false;
+    }
+    const chanId = request.incomingCircuitKey?.chanId?.toString();
+    if (!chanId) {
+      return false;
+    }
+    // Reload even if the channel is cached as open: it may just have closed.
+    // Only offers that match the auto-fail sign get here, so this is rare.
+    if (now() - loadedAt >= 1_000) {
+      loading ??= load().finally(() => {
+        loading = null;
+      });
+      await loading;
+    }
+    return !openChannelIds.has(chanId);
+  };
+}
+
 let coordinator: HtlcInterceptorCoordinator | null = null;
 
-export function startHtlcInterceptor(router: Client) {
+export function startHtlcInterceptor(router: Client, lightning: Client) {
   if (!coordinator) {
-    coordinator = new HtlcInterceptorCoordinator(() => htlcInterceptor(router));
+    coordinator = new HtlcInterceptorCoordinator(() => htlcInterceptor(router), [], {
+      isOnChainOffer: createOnChainOfferCheck(lightning),
+    });
     coordinator.start();
   }
 

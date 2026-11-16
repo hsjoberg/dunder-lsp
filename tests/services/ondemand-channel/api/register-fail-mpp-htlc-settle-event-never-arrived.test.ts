@@ -80,7 +80,7 @@ describe("/ondemand-channel/register", () => {
       "data",
       routerrpc.HtlcEvent.encode({
         eventType: routerrpc.HtlcEvent.EventType.FORWARD,
-        settleEvent: {},
+        finalHtlcEvent: { settled: true, offchain: true },
         incomingChannelId: incomingChanId,
         incomingHtlcId: htlcPart,
         outgoingChannelId: Long.fromValue(registerResponse.fakeChannelId),

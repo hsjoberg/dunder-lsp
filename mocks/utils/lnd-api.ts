@@ -74,6 +74,10 @@ export async function pendingChannels(lightning: Client) {
   return __pendingChannels();
 }
 
+export const forceCloseChannel = jest.fn(async (lightning: Client, channelPoint: string) =>
+  lnrpc.CloseStatusUpdate.create({}),
+);
+
 export const openChannelSync = jest.fn(() => {
   const openChannelSyncResponse = lnrpc.ChannelPoint.create({
     fundingTxidBytes: stringToUint8Array("abcdef"),

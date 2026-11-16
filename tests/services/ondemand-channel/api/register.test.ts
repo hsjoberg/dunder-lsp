@@ -62,7 +62,7 @@ describe("/ondemand-channel/register", () => {
       "data",
       routerrpc.HtlcEvent.encode({
         eventType: routerrpc.HtlcEvent.EventType.FORWARD,
-        settleEvent: {},
+        finalHtlcEvent: { settled: true, offchain: true },
         incomingChannelId: incomingChanId,
         incomingHtlcId: htlcPart,
         outgoingChannelId: Long.fromValue(registerResponse.fakeChannelId),
@@ -77,5 +77,68 @@ describe("/ondemand-channel/register", () => {
     await timeout(500);
 
     app.close();
+  });
+
+  test("waits for lnd's final outcome, not the settle event, before paying out", async () => {
+    (openChannelSync as jest.Mock).mockClear();
+    const app = build();
+
+    const amountSat = 20000;
+    const preimage = createPreimage(7);
+    const incomingChanId = Long.fromValue(7);
+    const htlcPart = Long.fromValue(77);
+    const response = await sendRegisterRequest(app, {
+      amountSat,
+      preimage: bytesToHexString(preimage),
+      pubkey: "abcdef12345",
+      signature: "validsig",
+    });
+    const registerResponse = response.json() as IRegisterOkResponse;
+
+    const htlcInterceptorStream: DuplexMock = require("../../../../src/utils/lnd-api")
+      .__htlcInterceptorStream;
+    let action: routerrpc.ResolveHoldForwardAction | null = null;
+    htlcInterceptorStream.write = (data: any) => {
+      const r = routerrpc.ForwardHtlcInterceptResponse.decode(data);
+      if (r.incomingCircuitKey?.chanId?.eq(incomingChanId)) {
+        action = r.action;
+      }
+      return true;
+    };
+    htlcInterceptorStream.emit(
+      "data",
+      createForwardHtlcInterceptRequest(
+        amountSat,
+        registerResponse.fakeChannelId,
+        sha256Buffer(preimage),
+        incomingChanId,
+        htlcPart,
+      ),
+    );
+    await waitForExpect(() => expect(action).toBe(routerrpc.ResolveHoldForwardAction.SETTLE));
+
+    const htlcEvents: BufferWritableMock = require("../../../../src/utils/lnd-api")
+      .__subscribeHtlcEventsStream;
+    const event = (fields: Partial<routerrpc.IHtlcEvent>) =>
+      htlcEvents.emit(
+        "data",
+        routerrpc.HtlcEvent.encode({
+          eventType: routerrpc.HtlcEvent.EventType.FORWARD,
+          incomingChannelId: incomingChanId,
+          incomingHtlcId: htlcPart,
+          outgoingChannelId: Long.fromValue(registerResponse.fakeChannelId),
+          ...fields,
+        }).finish(),
+      );
+
+    // lnd has sent the preimage, but the payer hasn't locked the settlement in.
+    event({ settleEvent: {} });
+    await timeout(500);
+    expect(openChannelSync).not.toHaveBeenCalled();
+
+    event({ finalHtlcEvent: { settled: true, offchain: true } });
+    await waitForExpect(() => expect(openChannelSync).toHaveBeenCalled());
+
+    await app.close();
   });
 });

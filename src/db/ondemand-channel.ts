@@ -34,6 +34,10 @@ export interface IHtlcSettlementDB {
   settled: number;
   claimed: number;
   channelOpenAttemptId?: string | null;
+  /** Block height at which the incoming HTLC expires. */
+  incomingExpiry?: number | null;
+  /** Decimal msat the incoming HTLC carried. */
+  incomingAmountMsat?: string | null;
 }
 
 export async function createChannelRequest(
@@ -162,6 +166,8 @@ export async function createHtlcSettlement(
     amountMsat,
     settled,
     claimed,
+    incomingExpiry,
+    incomingAmountMsat,
   }: IHtlcSettlementDB,
 ) {
   const storedAmountMsat = amountMsat ?? Long.fromValue(amountSat).mul(MSAT).toString();
@@ -174,7 +180,9 @@ export async function createHtlcSettlement(
         amountSat,
         amountMsat,
         settled,
-        claimed
+        claimed,
+        incomingExpiry,
+        incomingAmountMsat
       )
     VALUES
       (
@@ -184,7 +192,9 @@ export async function createHtlcSettlement(
         $amountSat,
         $amountMsat,
         $settled,
-        $claimed
+        $claimed,
+        $incomingExpiry,
+        $incomingAmountMsat
       )
     `,
     {
@@ -195,6 +205,8 @@ export async function createHtlcSettlement(
       $amountMsat: storedAmountMsat,
       $settled: settled,
       $claimed: claimed,
+      $incomingExpiry: incomingExpiry ?? null,
+      $incomingAmountMsat: incomingAmountMsat ?? null,
     },
   );
 }

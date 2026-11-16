@@ -159,6 +159,38 @@ export function subscribeHtlcEvents(router: Client) {
   );
 }
 
+/**
+ * Force-closes a channel: lnd broadcasts its latest commitment. Resolves once
+ * lnd reports the close as pending (the transaction is published).
+ */
+export function forceCloseChannel(lightning: Client, channelPoint: string) {
+  const [fundingTxidStr, outputIndex] = channelPoint.split(":");
+  const request = lnrpc.CloseChannelRequest.encode({
+    channelPoint: { fundingTxidStr, outputIndex: Number(outputIndex) },
+    force: true,
+  }).finish();
+  return new Promise<lnrpc.CloseStatusUpdate>((resolve, reject) => {
+    const stream = lightning.makeServerStreamRequest(
+      "/lnrpc.Lightning/CloseChannel",
+      (arg: any) => arg,
+      (arg) => arg,
+      request,
+      new Metadata(),
+      undefined,
+    );
+    stream.on("data", (data: Uint8Array) => {
+      stream.cancel();
+      resolve(lnrpc.CloseStatusUpdate.decode(data));
+    });
+    stream.on("error", (error: any) => {
+      // CANCELLED is our own cancel() after the first update.
+      if (error?.code !== 1) {
+        reject(error);
+      }
+    });
+  });
+}
+
 export function subscribeChannelEvents(lightning: Client) {
   const request = lnrpc.ChannelEventSubscription.encode({}).finish();
   return lightning.makeServerStreamRequest(

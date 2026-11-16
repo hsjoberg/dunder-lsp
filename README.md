@@ -71,9 +71,9 @@ section header rather than a second one, then restart lnd:
 [Application Options]
 ; ...your existing options...
 
-; Lets Dunder recover the outcome of an HTLC whose settle event it missed
-; (Dunder restart, stream reconnect). Without it such payments must be
-; checked by hand.
+; Required. Dunder pays out only once lnd reports an HTLC's final outcome;
+; this lets it recover an outcome it missed (Dunder restart, stream
+; reconnect). Without it such payments are never paid out automatically.
 store-final-htlc-resolutions=true
 ```
 
@@ -110,9 +110,14 @@ lncli bakemacaroon --save_to dunder.macaroon \
   uri:/lnrpc.Lightning/LookupHtlcResolution \
   uri:/lnrpc.Lightning/SubscribePeerEvents \
   uri:/lnrpc.Lightning/OpenChannelSync \
+  uri:/lnrpc.Lightning/CloseChannel \
   uri:/routerrpc.Router/HtlcInterceptor \
   uri:/routerrpc.Router/SubscribeHtlcEvents
 ```
+
+`CloseChannel` is only used to force-close a channel whose peer took a
+payment's preimage but didn't complete the settlement, shortly before the HTLC
+expires, so lnd can claim it on-chain.
 
 ### Reverse proxy (HTTPS)
 

@@ -29,6 +29,8 @@ services:
       - -rpcuser=dunder
       - -rpcpassword=dunder
       - -fallbackfee=0.0002
+      # Look up any transaction (getrawtransaction), e.g. to inspect on-chain HTLC claims.
+      - -txindex
     healthcheck:
       test: ["CMD-SHELL", "bitcoin-cli -regtest -rpcuser=dunder -rpcpassword=dunder getblockchaininfo || exit 1"]
       interval: 2s

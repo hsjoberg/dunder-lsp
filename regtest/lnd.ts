@@ -161,6 +161,32 @@ export function queryRoutes(lightning: Client, request: lnrpc.IQueryRoutesReques
   );
 }
 
+/** Opens a channel and waits until lnd has published the funding transaction. */
+export function openChannel(lightning: Client, pubkey: string, amountSat: number) {
+  return unary(
+    lightning,
+    "/lnrpc.Lightning/OpenChannelSync",
+    lnrpc.OpenChannelRequest.encode({
+      nodePubkey: Buffer.from(pubkey, "hex"),
+      localFundingAmount: Long.fromValue(amountSat),
+    }).finish(),
+    lnrpc.ChannelPoint.decode,
+  );
+}
+
+/**
+ * Freezes or unfreezes a node's container. A frozen node keeps its TCP
+ * connections open but answers nothing, like a peer that drops all packets.
+ */
+export function setNodeFrozen(node: RegtestNode, frozen: boolean) {
+  const result = spawnSync("docker", [frozen ? "pause" : "unpause", `dunder-regtest-${node}-1`], {
+    encoding: "utf8",
+  });
+  if (result.status !== 0 && !/is not paused|is already paused/.test(result.stderr)) {
+    throw new Error(`docker ${frozen ? "pause" : "unpause"} ${node} failed: ${result.stderr}`);
+  }
+}
+
 /** SendToRouteV2: sends one HTLC along the given route, exactly as built. */
 export function sendToRoute(router: Client, request: routerrpc.ISendToRouteRequest) {
   return unary(

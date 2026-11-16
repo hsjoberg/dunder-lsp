@@ -21,6 +21,7 @@ import { createPreimage } from "./register-helpers";
 
 import {
   __MOCK_BLOCK_HEIGHT,
+  __setListChannelsResponse,
   checkPeerConnected,
   openChannelSync,
 } from "../../../../mocks/utils/lnd-api";
@@ -343,6 +344,56 @@ describe("held multi-part payments", () => {
       channelId,
     );
     expect(rows).toEqual([{ incomingChannelId: "107" }]);
+  });
+
+  test("a recorded part offered again on-chain is settled and reported", async () => {
+    const { handler, htlc } = await setup({ amountSat: 10_000 });
+    const first = writer();
+    await handler(htlc(10_000, "109", "1"), first);
+    await waitFor(() => first.actions.length > 0);
+    expect(first.actions).toEqual([SETTLE]);
+
+    // The payer never locked it in; its channel was force-closed.
+    const errors = jest.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const onChain = Object.assign(writer(), { onChain: true });
+      await handler(htlc(10_000, "109", "1"), onChain);
+      expect(onChain.actions).toEqual([SETTLE]);
+      expect(errors).toHaveBeenCalledWith(
+        "A settled HTLC came back on-chain; settling it so lnd claims it",
+        expect.objectContaining({ circuitKey: "109:1" }),
+      );
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  test("a held part whose channel closed meanwhile is left for lnd's on-chain offer", async () => {
+    const { handler, htlc } = await setup({ amountSat: 20_000 });
+    __setListChannelsResponse({
+      channels: [
+        { chanId: Long.fromValue(301), channelPoint: "aa:0" },
+        { chanId: Long.fromValue(302), channelPoint: "bb:0" },
+      ],
+    });
+    try {
+      const first = writer();
+      await handler(htlc(10_000, "301", "1"), first);
+      // Channel 301 is force-closed while its part is held.
+      __setListChannelsResponse({
+        channels: [{ chanId: Long.fromValue(302), channelPoint: "bb:0" }],
+      });
+      const second = writer();
+      await handler(htlc(10_000, "302", "1"), second);
+      await waitFor(() => second.actions.length > 0);
+
+      expect(second.actions).toEqual([SETTLE]);
+      // Answering it would end the stream ("edge not found"). lnd offers it
+      // again on-chain, where the recorded part is settled.
+      expect(first.actions).toEqual([]);
+    } finally {
+      __setListChannelsResponse({ channels: [] });
+    }
   });
 
   test("a wrong payment hash is failed with a code lnd accepts", async () => {
