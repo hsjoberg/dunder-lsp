@@ -11,8 +11,9 @@ const LnUrlAuthLoginPage: React.FunctionComponent = ({ theme }: any) => {
   useEffect(() => {
     let ws: WebSocket;
     (async () => {
-      // Dummy request. This is apparently needed to make sure WebSocket get session cookie
-      await fetch("/admin/api/test", { credentials: "include" });
+      // Gets the session cookie first: the WebSocket handshake can't set it, and
+      // the WebSocket and /login-complete must share one session.
+      await fetch("/admin/api/login-session", { credentials: "include" });
 
       const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
       ws = new WebSocket(`${wsProtocol}://${window.location.host}/admin/api/login-ws`);

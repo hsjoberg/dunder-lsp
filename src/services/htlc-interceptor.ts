@@ -44,6 +44,9 @@ export type OnChainOfferCheck = (
 
 export type StreamResetListener = () => void;
 
+const DROP_WINDOW_MS = 60_000;
+const DROPS_BEFORE_WARNING = 3;
+
 export const handled = (): HtlcHandlerResult => ({ status: "HANDLED" });
 export const noDecision = (): HtlcHandlerResult => ({ status: "NO_DECISION" });
 
@@ -55,6 +58,8 @@ export class HtlcInterceptorCoordinator {
   private readonly attachedStreams = new WeakSet<HtlcInterceptorStream>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
+  /** When the recent streams ended, to notice a stream lnd keeps ending. */
+  private recentDrops: number[] = [];
   private stableTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly stableStreamMs: number;
   private readonly isOnChainOffer: OnChainOfferCheck;
@@ -215,6 +220,7 @@ export class HtlcInterceptorCoordinator {
     }
 
     this.retireStream(stream);
+    this.noteDrop();
 
     const delayMs = Math.min(
       this.reconnectDelayMs * Math.pow(2, this.reconnectAttempts),
@@ -227,6 +233,25 @@ export class HtlcInterceptorCoordinator {
       this.reconnectTimer = null;
       this.connect();
     }, delayMs);
+  }
+
+  /**
+   * Warns when lnd keeps ending the stream. Each drop releases (or replays)
+   * the HTLCs Dunder holds, so a stream that drops again and again makes
+   * on-demand payments fail. A cause can be an answer lnd rejects, repeated
+   * on every reconnect.
+   */
+  private noteDrop() {
+    const now = Date.now();
+    this.recentDrops = this.recentDrops.filter((at) => now - at < DROP_WINDOW_MS);
+    this.recentDrops.push(now);
+    if (this.recentDrops.length >= DROPS_BEFORE_WARNING) {
+      console.error(
+        `HTLC interceptor stream dropped ${this.recentDrops.length} times in the last ` +
+          `${DROP_WINDOW_MS / 1000} seconds; on-demand payments may be failing. Check lnd's ` +
+          "log for the reason it ends the stream.",
+      );
+    }
   }
 
   private retireStream(stream: HtlcInterceptorStream) {

@@ -37,7 +37,7 @@ describe("per-IP rate limit", () => {
       // Another client is unaffected.
       expect((await app.inject({ url: "/getInfo", headers: fromB })).statusCode).toBe(200);
       // So is the admin interface, apart from the login endpoints.
-      expect((await app.inject({ url: "/admin/api/test", headers: fromA })).statusCode).toBe(200);
+      expect((await app.inject({ url: "/admin/api/admins", headers: fromA })).statusCode).toBe(403);
       const login = { method: "POST" as const, url: "/admin/api/login-complete", headers: fromB };
       expect((await app.inject(login)).statusCode).toBe(403);
       expect((await app.inject(login)).statusCode).toBe(429);
@@ -72,6 +72,22 @@ describe("per-IP rate limit", () => {
       const response = await app.inject({ url: "/ondemand-channel/service-status" });
       expect(response.json().requestSigningVersion).toBe(2);
     } finally {
+      await app.close();
+    }
+  });
+
+  test("limits the session endpoint the login page calls first", async () => {
+    const restore = withConfig({ ipRateLimitPerMinute: 1, trustProxy: true });
+    const app = build();
+    try {
+      const request = {
+        url: "/admin/api/login-session",
+        headers: { "x-forwarded-for": "198.51.100.20", "x-forwarded-proto": "https" },
+      };
+      expect((await app.inject(request)).statusCode).toBe(200);
+      expect((await app.inject(request)).statusCode).toBe(429);
+    } finally {
+      restore();
       await app.close();
     }
   });

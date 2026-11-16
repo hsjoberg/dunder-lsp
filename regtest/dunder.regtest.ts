@@ -37,6 +37,9 @@ import {
   runChannelAcceptor,
   sendPayment,
   sendToRoute,
+  isolateNode,
+  lncliInContainer,
+  rejoinNode,
   setNodeFrozen,
   signMessage,
   waitFor,
@@ -590,6 +593,104 @@ describe("Dunder on regtest", () => {
       await resetMissionControl(payer.router);
     }
 
+    /**
+     * A 100,000 sat request paid in two parts: 90,000 from the payer, which then
+     * stops responding, and 10,000 from the wallet. Dunder settles both, so the
+     * payer has the preimage but never locks its part in. Returns the payer's
+     * channel and HTLC on the LSP.
+     */
+    async function settleWithFrozenPayer() {
+      const db = await getDb();
+      const amountSat = 100_000;
+      const walletPartSat = 10_000;
+      const { preimage, registration } = await register(amountSat);
+      const paymentHash = createHash("sha256").update(preimage).digest();
+      const paymentAddr = randomBytes(32);
+      const fakeChanId = Long.fromString(registration.fakeChannelId, true);
+
+      // Part 1 from the payer, then the payer stops responding.
+      const { channel, htlc } = await sendPayerPart(
+        registration,
+        paymentHash,
+        paymentAddr,
+        amountSat - walletPartSat,
+        amountSat,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      setNodeFrozen("payer", true);
+
+      // Part 2 from the wallet, over one of its payout channels from the
+      // LSP. Dunder settles both parts: the payer now has the preimage, but
+      // never locks the settlement in.
+      const walletChannel = (await listChannels(wallet.lightning)).channels
+        .filter((c) => c.remotePubkey === lspPubkey && c.active)
+        .sort((a, b) =>
+          Long.fromValue(b.localBalance!).compare(Long.fromValue(a.localBalance!)),
+        )[0];
+      const height = (await getInfo(wallet.lightning)).blockHeight;
+      const partMsat = Long.fromValue(walletPartSat).mul(1000);
+      const feeMsat = Long.fromValue(2000);
+      const finalExpiry = height + 43;
+      const walletAttempt = await sendToRoute(wallet.router, {
+        paymentHash,
+        route: {
+          totalTimeLock: finalExpiry + registration.cltvExpiryDelta,
+          totalAmtMsat: partMsat.add(feeMsat),
+          totalFeesMsat: feeMsat,
+          hops: [
+            {
+              chanId: Long.fromValue(walletChannel.chanId!),
+              pubKey: lspPubkey,
+              amtToForwardMsat: partMsat,
+              feeMsat,
+              expiry: finalExpiry,
+              tlvPayload: true,
+            },
+            {
+              chanId: fakeChanId,
+              pubKey: walletPubkey,
+              amtToForwardMsat: partMsat,
+              feeMsat: Long.fromValue(0),
+              expiry: finalExpiry,
+              tlvPayload: true,
+              mppRecord: { paymentAddr, totalAmtMsat: Long.fromValue(amountSat).mul(1000) },
+            },
+          ],
+        },
+      });
+      expect(Buffer.from(walletAttempt.preimage).equals(preimage)).toBe(true);
+
+      // No payout: lnd hasn't reported a final outcome for the payer's part.
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      expect(await getChannelRequest(db, registration.fakeChannelId)).toMatchObject({
+        status: "REGISTERED",
+        channelPoint: null,
+      });
+      return { registration, channel, htlc };
+    }
+
+    /** Waits until lnd's final outcome is in for both parts of the request. */
+    async function waitForBothPartsSettled(fakeChannelId: string, mineBlocks: () => void) {
+      const db = await getDb();
+      await waitFor(
+        "lnd's final outcome for the payer's part",
+        async () => {
+          mineBlocks();
+          await waitFor(
+            "the LSP to sync",
+            async () => (await getInfo(lsp.lightning)).syncedToChain,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          const rows = await db.all<{ settled: number }[]>(
+            "SELECT settled FROM htlcSettlement WHERE channelId = ?",
+            fakeChannelId,
+          );
+          return rows.length === 2 && rows.every((row) => row.settled === 1);
+        },
+        600_000,
+      );
+    }
+
     test("an HTLC offered again after its channel went on-chain doesn't drop the interceptor", async () => {
       const errorsBefore = interceptorErrors.length;
       const warn = jest.spyOn(console, "warn");
@@ -634,71 +735,8 @@ describe("Dunder on regtest", () => {
 
     test("a part the payer never locks in is claimed on-chain before it is paid out", async () => {
       const db = await getDb();
-      const amountSat = 100_000;
-      const walletPartSat = 10_000;
-      const { preimage, registration } = await register(amountSat);
-      const paymentHash = createHash("sha256").update(preimage).digest();
-      const paymentAddr = randomBytes(32);
-      const fakeChanId = Long.fromString(registration.fakeChannelId, true);
       try {
-        // Part 1 from the payer, then the payer stops responding.
-        const { channel, htlc } = await sendPayerPart(
-          registration,
-          paymentHash,
-          paymentAddr,
-          amountSat - walletPartSat,
-          amountSat,
-        );
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        setNodeFrozen("payer", true);
-
-        // Part 2 from the wallet, over one of its payout channels from the
-        // LSP. Dunder settles both parts: the payer now has the preimage, but
-        // never locks the settlement in.
-        const walletChannel = (await listChannels(wallet.lightning)).channels
-          .filter((c) => c.remotePubkey === lspPubkey && c.active)
-          .sort((a, b) =>
-            Long.fromValue(b.localBalance!).compare(Long.fromValue(a.localBalance!)),
-          )[0];
-        const height = (await getInfo(wallet.lightning)).blockHeight;
-        const partMsat = Long.fromValue(walletPartSat).mul(1000);
-        const feeMsat = Long.fromValue(2000);
-        const finalExpiry = height + 43;
-        const walletAttempt = await sendToRoute(wallet.router, {
-          paymentHash,
-          route: {
-            totalTimeLock: finalExpiry + registration.cltvExpiryDelta,
-            totalAmtMsat: partMsat.add(feeMsat),
-            totalFeesMsat: feeMsat,
-            hops: [
-              {
-                chanId: Long.fromValue(walletChannel.chanId!),
-                pubKey: lspPubkey,
-                amtToForwardMsat: partMsat,
-                feeMsat,
-                expiry: finalExpiry,
-                tlvPayload: true,
-              },
-              {
-                chanId: fakeChanId,
-                pubKey: walletPubkey,
-                amtToForwardMsat: partMsat,
-                feeMsat: Long.fromValue(0),
-                expiry: finalExpiry,
-                tlvPayload: true,
-                mppRecord: { paymentAddr, totalAmtMsat: Long.fromValue(amountSat).mul(1000) },
-              },
-            ],
-          },
-        });
-        expect(Buffer.from(walletAttempt.preimage).equals(preimage)).toBe(true);
-
-        // No payout: lnd hasn't reported a final outcome for the payer's part.
-        await new Promise((resolve) => setTimeout(resolve, 5000));
-        expect(await getChannelRequest(db, registration.fakeChannelId)).toMatchObject({
-          status: "REGISTERED",
-          channelPoint: null,
-        });
+        const { registration, channel, htlc } = await settleWithFrozenPayer();
 
         // Shortly before the HTLC expires, Dunder force-closes the channel.
         const target = htlc.expirationHeight - FORCE_CLOSE_BLOCKS_BEFORE_EXPIRY;
@@ -753,23 +791,7 @@ describe("Dunder on regtest", () => {
         if (blocksLeft > 3) {
           mine(blocksLeft - 3);
         }
-        await waitFor(
-          "lnd's final outcome for the payer's part",
-          async () => {
-            mine(1);
-            await waitFor(
-              "the LSP to sync",
-              async () => (await getInfo(lsp.lightning)).syncedToChain,
-            );
-            await new Promise((resolve) => setTimeout(resolve, 1000));
-            const rows = await db.all<{ settled: number }[]>(
-              "SELECT settled FROM htlcSettlement WHERE channelId = ?",
-              registration.fakeChannelId,
-            );
-            return rows.length === 2 && rows.every((row) => row.settled === 1);
-          },
-          600_000,
-        );
+        await waitForBothPartsSettled(registration.fakeChannelId, () => mine(1));
         const { pushAmountSat } = await expectPayout(registration.fakeChannelId);
         expect(pushAmountSat).toBeGreaterThan(0);
       } finally {
@@ -777,6 +799,49 @@ describe("Dunder on regtest", () => {
       }
       // Mines through the claim's timelock (the payer's channel sets 600 blocks).
     }, 900_000);
+
+    test("a part the payer takes on-chain itself is claimed by the LSP", async () => {
+      try {
+        const { registration, channel, htlc } = await settleWithFrozenPayer();
+        const errorCalls = (console.error as jest.Mock).mock.calls;
+        const errorsBefore = errorCalls.length;
+
+        // The payer comes back without reaching the LSP (it would otherwise
+        // just complete the settlement) and force-closes with its own
+        // commitment, which still holds the HTLC. Its lnd restarts on a
+        // network where only bitcoind is reachable.
+        isolateNode("payer");
+        await waitFor(
+          "the payer to sync on its own",
+          () => lncliInContainer("payer", ["getinfo"])?.synced_to_chain === true,
+          180_000,
+        );
+        lncliInContainer("payer", [
+          "closechannel",
+          "--force",
+          "--chan_point",
+          channel.channelPoint,
+        ]);
+
+        // The LSP sees the payer's commitment confirm. lnd offers the HTLC to
+        // the interceptor (the guard is not involved: the channel is already
+        // closed), Dunder settles it, and lnd claims it straight from the
+        // payer's commitment.
+        await waitForBothPartsSettled(registration.fakeChannelId, () => mine(1));
+        expect(errorCalls.slice(errorsBefore)).toContainEqual([
+          "A settled HTLC came back on-chain; settling it so lnd claims it",
+          expect.objectContaining({ circuitKey: `${channel.chanId}:${htlc.htlcIndex}` }),
+        ]);
+        expect(errorCalls.slice(errorsBefore).map((call) => call[0])).not.toContain(
+          "Force-closing a channel: its peer hasn't locked in a part Dunder settled, and the HTLC expires soon",
+        );
+        const { pushAmountSat } = await expectPayout(registration.fakeChannelId);
+        expect(pushAmountSat).toBeGreaterThan(0);
+      } finally {
+        rejoinNode("payer");
+        await restorePayerChannel();
+      }
+    }, 600_000);
   });
 
   test("the interceptor stream never dropped during the run", () => {

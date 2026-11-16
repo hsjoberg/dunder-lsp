@@ -42,7 +42,11 @@ describe("admin LNURL-auth login", () => {
       const pubkey = bytesToHexString(secp256k1.publicKeyCreate(privateKey));
       await createAdmin(db, pubkey, "Test admin");
 
-      const preLogin = await app.inject({ method: "GET", url: "/admin/api/test", headers: HTTPS });
+      const preLogin = await app.inject({
+        method: "GET",
+        url: "/admin/api/login-session",
+        headers: HTTPS,
+      });
       const preLoginCookie = cookieFrom(preLogin.headers["set-cookie"]);
 
       const socket = new WebSocket(`ws://127.0.0.1:${port}/admin/api/login-ws`, {

@@ -374,6 +374,12 @@ describe("HtlcInterceptorCoordinator", () => {
       dropAfterReplay();
 
       expect(delays).toEqual([10, 20, 40, 10]);
+      // Three drops within a minute are warned about.
+      expect(
+        errorSpy.mock.calls.some((call) =>
+          String(call[0]).startsWith("HTLC interceptor stream dropped 3 times"),
+        ),
+      ).toBe(true);
       coordinator.stop();
     } finally {
       errorSpy.mockRestore();

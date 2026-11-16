@@ -6,7 +6,7 @@ COPY proto /app/proto
 RUN npm ci
 RUN npm run proto
 COPY . .
-RUN cd src/services/admin/react-admin && npm install --legacy-peer-deps
+RUN cd src/services/admin/react-admin && npm ci --legacy-peer-deps
 RUN npm run build
 # Keep only runtime dependencies (built for this platform) for the final image.
 RUN npm prune --omit=dev
