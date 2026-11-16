@@ -11,6 +11,36 @@ const MAX_TRACKED_ADDRESSES = 100_000;
  */
 const LIMITED_PREFIXES = ["/ondemand-channel/", "/getInfo", "/estimateFee", "/admin/api/login"];
 
+/**
+ * The address a limit applies to. An IPv6 client usually controls a whole /64
+ * and could otherwise use a new address for every request, so IPv6 addresses
+ * are limited per /64.
+ */
+export function clientKey(ip: string) {
+  const address = ip.split("%")[0]; // Drop an IPv6 zone ("%eth0").
+  if (!address.includes(":")) {
+    return address;
+  }
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
+  if (mapped) {
+    return mapped[1]; // IPv4-mapped IPv6: the IPv4 address.
+  }
+  if (address.includes(".")) {
+    return address; // Other embedded-IPv4 forms are rare; keep the full address.
+  }
+  const [head, tail] = address.split("::");
+  const headParts = head ? head.split(":") : [];
+  const tailParts = tail ? tail.split(":") : [];
+  const groups =
+    tail === undefined
+      ? headParts
+      : [...headParts, ...Array(8 - headParts.length - tailParts.length).fill("0"), ...tailParts];
+  return `${groups
+    .slice(0, 4)
+    .map((group) => parseInt(group || "0", 16).toString(16))
+    .join(":")}::/64`;
+}
+
 function getLimitPerMinute() {
   return config.has("ipRateLimitPerMinute")
     ? config.get<number>("ipRateLimitPerMinute")
@@ -30,7 +60,11 @@ export function registerIpRateLimit(app: FastifyInstance) {
 
   app.addHook("onRequest", async (request, reply) => {
     const limit = getLimitPerMinute();
-    if (limit <= 0 || !LIMITED_PREFIXES.some((prefix) => request.url.startsWith(prefix))) {
+    // Decide by the matched route, not the raw URL: the router decodes the
+    // path before matching, so "/%67etInfo" reaches /getInfo without starting
+    // with "/getInfo".
+    const route = request.routeOptions.url;
+    if (limit <= 0 || !route || !LIMITED_PREFIXES.some((prefix) => route.startsWith(prefix))) {
       return;
     }
 
@@ -47,7 +81,7 @@ export function registerIpRateLimit(app: FastifyInstance) {
       }
     }
 
-    const address = request.ip;
+    const address = clientKey(request.ip);
     const window = windows.get(address);
     if (!window || now - window.start >= WINDOW_MS) {
       windows.set(address, { start: now, count: 1 });
