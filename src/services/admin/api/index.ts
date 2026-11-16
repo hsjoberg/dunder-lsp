@@ -25,7 +25,10 @@ const AdminApi = async function (app, { lightning, router }) {
   app.register(AdminChannelOpenAttempts, { lightning });
 
   app.get("/logout", async (request) => {
-    request.sessionStore.destroy(request.session.sessionId, (error) => console.error(error));
+    // Destroy through the session itself: destroying only the stored copy
+    // leaves request.session in place, and @fastify/session saves it back
+    // when the response is sent, so the cookie would stay logged in.
+    await request.session.destroy();
     return "OK";
   });
 } as FastifyPluginAsync<{ lightning: Client; router: Client }>;

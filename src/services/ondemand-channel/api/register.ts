@@ -588,6 +588,14 @@ async function settleHeldPayment(
 
   const parts = [...payment.parts.values()];
   try {
+    // The handler's "already paid" check ran before its awaits. Another payment
+    // for this request may have been recorded since: a new held payment only
+    // starts after the previous one removed its entry, which happens after its
+    // rows were written, so checking again here always sees them.
+    if (await hasHtlcSettlements(db, payment.channelId)) {
+      failHeldPayment(payment, "Request has already been paid");
+      return;
+    }
     // Record every part before revealing the preimage. A settled HTLC must
     // never exist without its row, or the recipient could not be paid out.
     await createHtlcSettlements(

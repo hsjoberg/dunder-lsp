@@ -29,7 +29,7 @@ function nextMessage(socket: any) {
 
 describe("admin LNURL-auth login", () => {
   test("issues a new session at login and accepts each k1 only once", async () => {
-    const app = build();
+    const app = build({ trustProxy: true });
     await app.listen({ host: "127.0.0.1", port: 0 });
     const port = (app.server.address() as AddressInfo).port;
     try {
