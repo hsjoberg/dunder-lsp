@@ -76,7 +76,13 @@ function isSameOrigin(request: FastifyRequest) {
 const AdminLogin = async function (app, { lightning, router }) {
   const db = await getDb();
 
-  app.get("/test", async (request) => {
+  // The login page calls this before opening the login WebSocket. A WebSocket
+  // handshake response can't set the session cookie (@fastify/session sets
+  // it when a normal response is sent), so without this the WebSocket and the
+  // later /login-complete would each get a different session. Writing a value
+  // makes the session be stored (saveUninitialized is off). It falls under the
+  // per-IP rate limit for "/admin/api/login".
+  app.get("/login-session", async (request) => {
     request.session.set<any>("lnurlAuthSession", true);
     return "1";
   });

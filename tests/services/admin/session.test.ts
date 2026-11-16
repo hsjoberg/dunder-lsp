@@ -101,7 +101,7 @@ describe("admin session cookie", () => {
 
     const response = await app.inject({
       method: "GET",
-      url: "/admin/api/test",
+      url: "/admin/api/login-session",
       headers: { "x-forwarded-proto": "https" },
     });
 
@@ -119,7 +119,7 @@ describe("admin session cookie", () => {
     const app = buildBehindProxy();
     await app.ready();
 
-    const response = await app.inject({ method: "GET", url: "/admin/api/test" });
+    const response = await app.inject({ method: "GET", url: "/admin/api/login-session" });
 
     expect(response.headers["set-cookie"]).toBeUndefined();
     await app.close();
@@ -159,7 +159,7 @@ describe("admin session cookie", () => {
     try {
       await app.ready();
       const initial = await app.inject({
-        url: "/admin/api/test",
+        url: "/admin/api/login-session",
         headers: { "x-forwarded-proto": "https" },
       });
       spy.mockRestore();
