@@ -58,24 +58,35 @@ export async function getHtlcSettlementsTotal(db: Database) {
   return result!.total;
 }
 
+/**
+ * Looks up one settlement by the id the admin interface uses for it:
+ * `${channelId}-${incomingChannelId}-${htlcId}`.
+ */
+export async function getHtlcSettlementByAdminId(db: Database, id: string) {
+  const match = /^(\d+)-(\d+)-(\d+)$/.exec(id);
+  if (!match) {
+    return undefined;
+  }
+  return db.get<IHtlcSettlementDB>(
+    `SELECT *
+     FROM htlcSettlement
+     WHERE channelId = $channelId
+       AND incomingChannelId = $incomingChannelId
+       AND htlcId = $htlcId`,
+    {
+      $channelId: match[1],
+      $incomingChannelId: match[2],
+      $htlcId: match[3],
+    },
+  );
+}
+
 export async function getHtlcSettlements(
   db: Database,
-  htlcId?: number,
   filters?: { [key: string]: any },
   range?: [number, number],
   sort?: [string, string],
 ) {
-  if (htlcId) {
-    return db.all<IHtlcSettlementDB[]>(
-      `SELECT *
-      FROM htlcSettlement
-      WHERE htlcId = $htlcId`,
-      {
-        $htlcId: htlcId,
-      },
-    );
-  }
-
   const sql = SQL`
     SELECT * FROM htlcSettlement
     JOIN channelRequest ON htlcSettlement.channelId = channelRequest.channelId `;

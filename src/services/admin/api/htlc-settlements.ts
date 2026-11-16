@@ -2,7 +2,11 @@ import { FastifyPluginAsync } from "fastify";
 import { Client } from "@grpc/grpc-js";
 
 import getDb from "../../../db/db";
-import { getHtlcSettlements, getHtlcSettlementsTotal } from "../../../db/ondemand-channel-admin";
+import {
+  getHtlcSettlementByAdminId,
+  getHtlcSettlements,
+  getHtlcSettlementsTotal,
+} from "../../../db/ondemand-channel-admin";
 import { requireAuthenticatedAdmin } from "./auth";
 
 const AdminHtlcSettlements = async function (app, { lightning, router }) {
@@ -47,7 +51,7 @@ const AdminHtlcSettlements = async function (app, { lightning, router }) {
       }
     }
 
-    const htlcSettlements = (await getHtlcSettlements(db, undefined, filter, range, sort)).map(
+    const htlcSettlements = (await getHtlcSettlements(db, filter, range, sort)).map(
       (htlcSettlement) => {
         return {
           ...htlcSettlement,
@@ -61,27 +65,27 @@ const AdminHtlcSettlements = async function (app, { lightning, router }) {
     return htlcSettlements;
   });
 
-  // TODO htlcId/Id looks weird
+  // The id is `${channelId}-${incomingChannelId}-${htlcId}`, as in the list.
   app.get<{
     Params: {
-      htlcId: string;
+      id: string;
     };
-  }>("/htlcSettlements/:htlcId", async (request, reply) => {
+  }>("/htlcSettlements/:id", async (request, reply) => {
     if (!(await requireAuthenticatedAdmin(db, request, reply))) {
       return;
     }
 
-    const htlcId = Number.parseInt(request.params.htlcId, 10);
-
-    const htlcSettlements = (await getHtlcSettlements(db, htlcId)).map((htlcSettlement) => {
-      return {
-        ...htlcSettlement,
-        id: `${htlcSettlement.channelId}-${htlcSettlement.incomingChannelId}-${htlcSettlement.htlcId}`,
-        claimed: !!htlcSettlement.claimed,
-        settled: !!htlcSettlement.settled,
-      };
-    });
-    return htlcSettlements[0];
+    const htlcSettlement = await getHtlcSettlementByAdminId(db, request.params.id);
+    if (!htlcSettlement) {
+      reply.code(404);
+      return { status: "ERROR", reason: "HTLC settlement not found" };
+    }
+    return {
+      ...htlcSettlement,
+      id: `${htlcSettlement.channelId}-${htlcSettlement.incomingChannelId}-${htlcSettlement.htlcId}`,
+      claimed: !!htlcSettlement.claimed,
+      settled: !!htlcSettlement.settled,
+    };
   });
 } as FastifyPluginAsync<{ lightning: Client; router: Client }>;
 
