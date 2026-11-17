@@ -119,6 +119,10 @@ lncli bakemacaroon --save_to dunder.macaroon \
 payment's preimage but didn't complete the settlement, shortly before the HTLC
 expires, so lnd can claim it on-chain.
 
+Protect this macaroon like an admin macaroon. `OpenChannelSync` can already
+move the on-chain wallet into channels, and `CloseChannel` also allows a
+cooperative close to an address the caller names.
+
 ### Reverse proxy (HTTPS)
 
 Dunder serves plain HTTP; put it behind a reverse proxy that terminates TLS.
