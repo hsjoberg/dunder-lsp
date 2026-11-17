@@ -295,12 +295,18 @@ const AdminAdmin = async function (app, { lightning, router }) {
     }
 
     // Verify that the message is valid
-    const signature = secp256k1.signatureImport(hexToUint8Array(request.query.sig));
-    const valid = secp256k1.ecdsaVerify(
-      signature,
-      hexToUint8Array(request.query.k1),
-      hexToUint8Array(request.query.key),
-    );
+    let valid = false;
+    try {
+      const signature = secp256k1.signatureImport(hexToUint8Array(request.query.sig));
+      valid = secp256k1.ecdsaVerify(
+        signature,
+        hexToUint8Array(request.query.k1),
+        hexToUint8Array(request.query.key),
+      );
+    } catch {
+      // A malformed signature or key.
+      valid = false;
+    }
     if (!valid) {
       reply.code(400);
       const error: IErrorResponse = {

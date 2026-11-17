@@ -163,7 +163,11 @@ export function subscribeHtlcEvents(router: Client) {
  * Force-closes a channel: lnd broadcasts its latest commitment. Resolves once
  * lnd reports the close as pending (the transaction is published).
  */
-export function forceCloseChannel(lightning: Client, channelPoint: string) {
+/**
+ * Gives up after `timeoutMs` if lnd hasn't confirmed the close by then, so a
+ * caller never waits forever. lnd may still go ahead with the close.
+ */
+export function forceCloseChannel(lightning: Client, channelPoint: string, timeoutMs = 60_000) {
   const [fundingTxidStr, outputIndex] = channelPoint.split(":");
   const request = lnrpc.CloseChannelRequest.encode({
     channelPoint: { fundingTxidStr, outputIndex: Number(outputIndex) },
@@ -176,7 +180,7 @@ export function forceCloseChannel(lightning: Client, channelPoint: string) {
       (arg) => arg,
       request,
       new Metadata(),
-      undefined,
+      { deadline: Date.now() + timeoutMs },
     );
     stream.on("data", (data: Uint8Array) => {
       stream.cancel();
@@ -187,6 +191,10 @@ export function forceCloseChannel(lightning: Client, channelPoint: string) {
       if (error?.code !== 1) {
         reject(error);
       }
+    });
+    stream.on("end", () => {
+      // Without an update first: a no-op once already resolved.
+      reject(new Error("lnd ended the CloseChannel stream without an update"));
     });
   });
 }

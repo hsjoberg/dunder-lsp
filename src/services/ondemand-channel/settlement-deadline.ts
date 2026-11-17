@@ -26,9 +26,21 @@ import { forceCloseChannel, getInfo, listChannels } from "../../utils/lnd-api";
  * so an honest payer always has time to lock the settlement in (it takes
  * seconds) before the guard acts, and lnd still has this many blocks to
  * confirm the close and claim the HTLC.
+ *
+ * A part below the channel's dust limit has no output on-chain, so closing
+ * for it gains nothing; it is skipped (and would otherwise let a peer make
+ * Dunder pay for a force close with a few sats).
  */
 export const FORCE_CLOSE_BLOCKS_BEFORE_EXPIRY = 18;
 const CHECK_INTERVAL_MS = 60_000;
+
+/**
+ * A claimed part gets its final outcome once the claim's timelock (at most
+ * 2016 blocks) has passed. A part still unsettled four weeks after its
+ * expiry never will by itself, and its request is never paid out.
+ */
+export const OVERDUE_BLOCKS_AFTER_EXPIRY = 4032;
+const reportedOverdue = new Set<string>();
 
 /**
  * Force-closes every channel that holds a part Dunder settled but lnd hasn't
@@ -43,6 +55,26 @@ export async function forceCloseChannelsWithStalledSettlements(db: Database, lig
     return [];
   }
   const height = (await getInfo(lightning)).blockHeight;
+  for (const settlement of unsettled) {
+    const key = `${settlement.incomingChannelId}:${settlement.htlcId}`;
+    if (
+      height - settlement.incomingExpiry! > OVERDUE_BLOCKS_AFTER_EXPIRY &&
+      !reportedOverdue.has(key)
+    ) {
+      reportedOverdue.add(key);
+      console.error(
+        "A settled part still has no final outcome long after its expiry; its request won't be paid out without a look",
+        {
+          channelId: settlement.channelId,
+          incomingChannelId: settlement.incomingChannelId,
+          htlcId: settlement.htlcId,
+          amountMsat: settlement.amountMsat,
+          incomingExpiry: settlement.incomingExpiry,
+          height,
+        },
+      );
+    }
+  }
   const due = unsettled.filter(
     (settlement) => settlement.incomingExpiry! - height <= FORCE_CLOSE_BLOCKS_BEFORE_EXPIRY,
   );
@@ -60,11 +92,16 @@ export async function forceCloseChannelsWithStalledSettlements(db: Database, lig
     );
     // Only parts whose HTLC is still pending on the channel. A part that was
     // locked in (and only its final event was missed) is no longer there.
+    // Dust HTLCs have no output on Dunder's commitment, so nothing to claim.
+    const dustLimitSat = Number(channel.localConstraints?.dustLimitSat ?? 0);
     const stalled = due.filter(
       (settlement) =>
         ids.has(settlement.incomingChannelId) &&
         channel.pendingHtlcs.some(
-          (htlc) => htlc.incoming && htlc.htlcIndex?.toString() === settlement.htlcId,
+          (htlc) =>
+            htlc.incoming &&
+            htlc.htlcIndex?.toString() === settlement.htlcId &&
+            Number(htlc.amount ?? 0) >= dustLimitSat,
         ),
     );
     if (stalled.length === 0) {

@@ -25,7 +25,9 @@ export default function (options?: FastifyServerOptions) {
   // same-origin only and never gets CORS headers.
   app.register(fastifyCors, {
     delegator: (request, callback) => {
-      callback(null, { origin: !request.url.startsWith("/admin") });
+      // The matched route, so a percent-encoded path can't avoid the rule.
+      const path = request.routeOptions.url ?? request.url;
+      callback(null, { origin: !path.startsWith("/admin") });
     },
   });
 

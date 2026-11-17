@@ -5,6 +5,7 @@ import getDb from "../../../src/db/db";
 import { createChannelRequest, createHtlcSettlements } from "../../../src/db/ondemand-channel";
 import {
   FORCE_CLOSE_BLOCKS_BEFORE_EXPIRY,
+  OVERDUE_BLOCKS_AFTER_EXPIRY,
   forceCloseChannelsWithStalledSettlements,
 } from "../../../src/services/ondemand-channel/settlement-deadline";
 import {
@@ -45,16 +46,18 @@ async function recordPart(blocksLeft: number, settled = 0) {
   return db;
 }
 
-function openChannel(pendingHtlcIndexes: number[]) {
+function openChannel(pendingHtlcIndexes: number[], amountSat = 20_000) {
   __setListChannelsResponse({
     channels: [
       {
         chanId: Long.fromString(INCOMING_CHANNEL, true),
         channelPoint: "aa".repeat(32) + ":1",
         remotePubkey: "02payer",
+        localConstraints: { dustLimitSat: Long.fromValue(354, true) },
         pendingHtlcs: pendingHtlcIndexes.map((index) => ({
           incoming: true,
           htlcIndex: Long.fromValue(index, true),
+          amount: Long.fromValue(amountSat),
         })),
       },
     ],
@@ -100,6 +103,30 @@ describe("settlement deadline guard", () => {
 
     expect(await forceCloseChannelsWithStalledSettlements(db, {} as any)).toEqual([]);
     expect(forceCloseChannel).not.toHaveBeenCalled();
+  });
+
+  test("doesn't force-close for a part below the dust limit (nothing to claim on-chain)", async () => {
+    const db = await recordPart(5);
+    openChannel([3], 353);
+
+    expect(await forceCloseChannelsWithStalledSettlements(db, {} as any)).toEqual([]);
+    expect(forceCloseChannel).not.toHaveBeenCalled();
+  });
+
+  test("warns once about a part with no final outcome long after its expiry", async () => {
+    const db = await recordPart(-OVERDUE_BLOCKS_AFTER_EXPIRY - 1);
+    __setListChannelsResponse({ channels: [] });
+    const error = jest.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await forceCloseChannelsWithStalledSettlements(db, {} as any);
+      await forceCloseChannelsWithStalledSettlements(db, {} as any);
+      const warnings = error.mock.calls.filter(([message]) =>
+        String(message).includes("no final outcome long after its expiry"),
+      );
+      expect(warnings).toHaveLength(1);
+    } finally {
+      error.mockRestore();
+    }
   });
 
   test("does nothing when the channel is already closed (lnd handles it on-chain)", async () => {
