@@ -304,6 +304,13 @@ type HeldPayment = {
 const heldPayments = new Map<string, HeldPayment>();
 
 /**
+ * Interceptor stream resets so far. A handler that started before a reset
+ * answers on the old stream, which is gone: lnd has released its HTLC (or
+ * offers it again on the new stream), so the handler must not count it.
+ */
+let streamResets = 0;
+
+/**
  * How long a settled payment stays in `heldPayments`. An HTLC offer for one of
  * its parts (lnd's single on-chain offer, for example) can be checked against
  * the database just before the parts are recorded and reach the held payment
@@ -412,6 +419,7 @@ async function answerHeldParts(
  * part is answered from there.
  */
 export function dropHeldPaymentsAfterStreamReset() {
+  streamResets += 1;
   for (const [channelId, payment] of heldPayments) {
     if (payment.state === "COLLECTING") {
       clearTimeout(payment.timer);
@@ -491,6 +499,7 @@ export const createOnDemandChannelHtlcHandler = (
   db: Database,
   lightning: Client,
 ): HtlcHandler => async (request, writer) => {
+  const resetsAtStart = streamResets;
   const channelId = request.outgoingRequestedChanId.toString();
   const channelRequest = await getChannelRequest(db, channelId);
   if (!channelRequest) {
@@ -594,11 +603,21 @@ export const createOnDemandChannelHtlcHandler = (
   const alreadyPaid = await hasHtlcSettlements(db, channelId);
   const peerConnected = await checkPeerConnectedRecent(lightning, channelRequest.pubkey);
   const expiryProblem = await checkHtlcExpiry(lightning, request);
-  const incomingChannel = await findOpenChannel(lightning, incomingChannelId);
+  // An on-chain offer's channel has closed, so it is never in the list.
+  const incomingChannel = writer.onChain
+    ? undefined
+    : await findOpenChannel(lightning, incomingChannelId);
   const incomingChannelPoint = incomingChannel?.channelPoint;
 
   // Everything below runs without awaiting, so the held payment can't change
   // underneath it.
+  if (streamResets !== resetsAtStart) {
+    console.warn("Interceptor stream reset while handling an HTLC; dropping it", {
+      channelId,
+      circuitKey,
+    });
+    return handled();
+  }
   let payment = heldPayments.get(channelId);
 
   const knownPart = payment?.parts.get(circuitKey);

@@ -22,6 +22,7 @@ import { createPreimage } from "./register-helpers";
 
 import {
   __MOCK_BLOCK_HEIGHT,
+  __listChannels,
   __listChannelsRecent,
   __setListChannelsResponse,
   checkPeerConnected,
@@ -199,6 +200,63 @@ describe("held multi-part payments", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(released.actions).toEqual([]);
     expect(other.actions).toEqual([]);
+  });
+
+  test("a part whose handler spans a stream reset is not counted", async () => {
+    const { db, channelId, handler, htlc } = await setup();
+    // The part's handler stalls in its lnd lookups while the stream resets.
+    let release!: () => void;
+    (checkPeerConnected as jest.Mock).mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => (release = () => resolve(true))),
+    );
+    const dead = writer();
+    const deadHandled = handler(htlc(10_000, "43", "1"), dead);
+    await waitFor(() => release !== undefined);
+    dropHeldPaymentsAfterStreamReset();
+    release();
+    await deadHandled;
+
+    // lnd released the dead part; the payer sends the rest of the amount.
+    const rest = writer();
+    await handler(htlc(10_000, "44", "1"), rest);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(dead.actions).toEqual([]);
+    expect(rest.actions).toEqual([]);
+    expect(await hasHtlcSettlements(db, channelId)).toBe(false);
+  });
+
+  test("a replayed part keeps its new stream when the old handler finishes later", async () => {
+    const { handler, htlc } = await setup();
+    let release!: () => void;
+    (checkPeerConnected as jest.Mock).mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => (release = () => resolve(true))),
+    );
+    const oldStream = writer();
+    const oldHandled = handler(htlc(10_000, "45", "1"), oldStream);
+    await waitFor(() => release !== undefined);
+    dropHeldPaymentsAfterStreamReset();
+
+    // lnd offers the part again on the new stream before the old handler ends.
+    const newStream = writer();
+    await handler(htlc(10_000, "45", "1"), newStream);
+    release();
+    await oldHandled;
+
+    const second = writer();
+    await handler(htlc(10_000, "46", "1"), second);
+    await waitFor(() => second.actions.length > 0);
+    expect(newStream.actions).toEqual([SETTLE]);
+    expect(oldStream.actions).toEqual([]);
+  });
+
+  test("an on-chain offer does not look up its closed channel", async () => {
+    const { handler, htlc } = await setup();
+    __listChannels.mockClear();
+    __listChannelsRecent.mockClear();
+    const onChain = Object.assign(writer(), { onChain: true });
+    await handler(htlc(10_000, "47", "1"), onChain);
+    expect(__listChannelsRecent).not.toHaveBeenCalled();
+    expect(__listChannels).not.toHaveBeenCalled();
   });
 
   test("a payment for an expired request is failed (unknown_next_peer)", async () => {
