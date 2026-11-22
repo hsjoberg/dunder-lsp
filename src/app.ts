@@ -13,6 +13,23 @@ const PUBLIC_CACHE_MS = 30_000;
 
 assertEnvironment();
 
+/**
+ * Admin when either the matched route or the URL (as sent or decoded) is under
+ * /admin. A percent-encoded admin path still matches its admin route, and a
+ * CORS preflight (OPTIONS) matches @fastify/cors's catch-all route instead.
+ */
+export function isAdminPath(routeUrl: string | undefined, rawUrl: string) {
+  const rawPath = rawUrl.split("?")[0];
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(rawPath);
+  } catch {
+    // A path that can't be decoded: no CORS for it.
+    return true;
+  }
+  return [routeUrl ?? "", rawPath, decoded].some((url) => url.startsWith("/admin"));
+}
+
 export default function (options?: FastifyServerOptions) {
   const app = fastify({
     // Behind a reverse proxy, which proxies to trust for X-Forwarded-For
@@ -21,13 +38,19 @@ export default function (options?: FastifyServerOptions) {
     ...options,
   });
   registerIpRateLimit(app);
+  // The admin session is only loaded for URLs that start with /admin as sent,
+  // so an encoded path (/%61dmin/...) would reach admin routes without it.
+  app.addHook("onRequest", async (request, reply) => {
+    if (request.routeOptions.url?.startsWith("/admin") && !request.url.startsWith("/admin")) {
+      reply.code(404).send({ status: "ERROR", reason: "Not found" });
+      return reply;
+    }
+  });
   // The public wallet API may be called from browsers. The admin interface is
   // same-origin only and never gets CORS headers.
   app.register(fastifyCors, {
     delegator: (request, callback) => {
-      // The matched route, so a percent-encoded path can't avoid the rule.
-      const path = request.routeOptions.url ?? request.url;
-      callback(null, { origin: !path.startsWith("/admin") });
+      callback(null, { origin: !isAdminPath(request.routeOptions.url, request.url) });
     },
   });
 

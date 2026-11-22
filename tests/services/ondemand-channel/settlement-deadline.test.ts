@@ -8,6 +8,7 @@ import {
   OVERDUE_BLOCKS_AFTER_EXPIRY,
   forceCloseChannelsWithStalledSettlements,
 } from "../../../src/services/ondemand-channel/settlement-deadline";
+import { lnrpc } from "../../../src/proto";
 import {
   __MOCK_BLOCK_HEIGHT,
   __setListChannelsResponse,
@@ -111,6 +112,29 @@ describe("settlement deadline guard", () => {
 
     expect(await forceCloseChannelsWithStalledSettlements(db, {} as any)).toEqual([]);
     expect(forceCloseChannel).not.toHaveBeenCalled();
+  });
+
+  test("ignores the fee rate, which the channel opener controls, on channels without anchors", async () => {
+    const db = await recordPart(5);
+    __setListChannelsResponse({
+      channels: [
+        {
+          chanId: Long.fromString(INCOMING_CHANNEL, true),
+          channelPoint: "aa".repeat(32) + ":1",
+          commitmentType: lnrpc.CommitmentType.STATIC_REMOTE_KEY,
+          // A fee rate raised so far that lnd would trim even a 200,000 sat HTLC.
+          feePerKw: Long.fromValue(300_000, true),
+          localConstraints: { dustLimitSat: Long.fromValue(354, true) },
+          pendingHtlcs: [
+            { incoming: true, htlcIndex: Long.fromValue(3, true), amount: Long.fromValue(200_000) },
+          ],
+        },
+      ],
+    });
+
+    expect(await forceCloseChannelsWithStalledSettlements(db, {} as any)).toEqual([
+      "aa".repeat(32) + ":1",
+    ]);
   });
 
   test("warns once about a part with no final outcome long after its expiry", async () => {

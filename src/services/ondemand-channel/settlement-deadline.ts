@@ -93,6 +93,9 @@ export async function forceCloseChannelsWithStalledSettlements(db: Database, lig
     // Only parts whose HTLC is still pending on the channel. A part that was
     // locked in (and only its final event was missed) is no longer there.
     // Dust HTLCs have no output on Dunder's commitment, so nothing to claim.
+    // Only the dust limit counts, not the HTLC transaction's fee that older
+    // channels also trim by: the channel opener sets that fee rate, so a payer
+    // that opened the channel could raise it to make the guard skip its part.
     const dustLimitSat = Number(channel.localConstraints?.dustLimitSat ?? 0);
     const stalled = due.filter(
       (settlement) =>

@@ -9,7 +9,10 @@ import build from "../../../src/app";
 import getDb from "../../../src/db/db";
 import { createAdmin } from "../../../src/db/admin";
 import { bytesToHexString } from "../../../src/utils/common";
-import { MAX_LOGIN_SOCKETS } from "../../../src/services/admin/api/login";
+import {
+  MAX_LOGIN_SOCKETS,
+  MAX_LOGIN_SOCKETS_PER_CLIENT,
+} from "../../../src/services/admin/api/login";
 
 const HTTPS = { "x-forwarded-proto": "https" };
 
@@ -141,13 +144,49 @@ describe("admin LNURL-auth login", () => {
     }
   });
 
-  test("refuses login WebSockets beyond the limit", async () => {
-    const app = build();
+  test("refuses login WebSockets from one address beyond its limit", async () => {
+    const app = build({ trustProxy: true });
     await app.listen({ host: "127.0.0.1", port: 0 });
     const port = (app.server.address() as AddressInfo).port;
+    const open = (ip: string) =>
+      new WebSocket(`ws://127.0.0.1:${port}/admin/api/login-ws`, {
+        headers: { origin: `http://127.0.0.1:${port}`, "x-forwarded-for": ip },
+      });
+    const sockets: any[] = [];
+    try {
+      for (let i = 0; i < MAX_LOGIN_SOCKETS_PER_CLIENT; i++) {
+        const socket = open("198.51.100.30");
+        sockets.push(socket);
+        await new Promise((resolve) => socket.once("open", resolve));
+      }
+      const extra = open("198.51.100.30");
+      sockets.push(extra);
+      expect(await new Promise<number>((resolve) => extra.once("close", resolve))).toBe(1013);
+
+      // Another address still gets in.
+      const other = open("198.51.100.31");
+      sockets.push(other);
+      await new Promise((resolve) => other.once("open", resolve));
+      other.send("GET_LNURL");
+      expect(await nextMessage(other)).toHaveProperty("lnurlAuth");
+    } finally {
+      sockets.forEach((socket) => socket.terminate());
+      await app.close();
+    }
+  });
+
+  test("refuses login WebSockets beyond the limit", async () => {
+    const app = build({ trustProxy: true });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const port = (app.server.address() as AddressInfo).port;
+    let opened = 0;
+    // A different address each time, so the per-address limit isn't reached.
     const open = () =>
       new WebSocket(`ws://127.0.0.1:${port}/admin/api/login-ws`, {
-        headers: { origin: `http://127.0.0.1:${port}` },
+        headers: {
+          origin: `http://127.0.0.1:${port}`,
+          "x-forwarded-for": `10.0.${Math.floor(opened / 250)}.${(opened++ % 250) + 1}`,
+        },
       });
     const sockets: any[] = [];
     try {

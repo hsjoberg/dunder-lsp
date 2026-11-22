@@ -304,6 +304,29 @@ describe("held multi-part payments", () => {
     expect(part.actions).toEqual([]);
   });
 
+  test("an HTLC expiring more than 2016 blocks ahead is failed", async () => {
+    const { handler, htlc } = await setup();
+    const far = writer();
+    await handler(
+      htlc(10_000, "104", "1", {
+        incomingExpiry: __MOCK_BLOCK_HEIGHT + 2017,
+        autoFailHeight: __MOCK_BLOCK_HEIGHT + 2004,
+      }),
+      far,
+    );
+    expect(far.actions).toEqual([FAIL]);
+
+    const limit = writer();
+    await handler(
+      htlc(10_000, "105", "1", {
+        incomingExpiry: __MOCK_BLOCK_HEIGHT + 2016,
+        autoFailHeight: __MOCK_BLOCK_HEIGHT + 2003,
+      }),
+      limit,
+    );
+    expect(limit.actions).toEqual([]);
+  });
+
   test("without lnd's auto-fail height, it is derived from the incoming expiry", async () => {
     const { handler, htlc } = await setup();
     const part = writer();
@@ -391,6 +414,30 @@ describe("held multi-part payments", () => {
       // Answering it would end the stream ("edge not found"). lnd offers it
       // again on-chain, where the recorded part is settled.
       expect(first.actions).toEqual([]);
+    } finally {
+      __setListChannelsResponse({ channels: [] });
+    }
+  });
+
+  test("a part below the incoming channel's dust limit is failed", async () => {
+    const { handler, htlc } = await setup({ amountSat: 20_000 });
+    __setListChannelsResponse({
+      channels: [
+        {
+          chanId: Long.fromValue(311),
+          channelPoint: "cc:0",
+          localConstraints: { dustLimitSat: Long.fromValue(354, true) },
+        },
+      ],
+    });
+    try {
+      const dust = writer();
+      await handler(htlc(353, "311", "1"), dust);
+      expect(dust.actions).toEqual([FAIL]);
+
+      const atLimit = writer();
+      await handler(htlc(354, "311", "2"), atLimit);
+      expect(atLimit.actions).toEqual([]);
     } finally {
       __setListChannelsResponse({ channels: [] });
     }

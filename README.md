@@ -80,13 +80,15 @@ store-final-htlc-resolutions=true
 lnd only stores outcomes from the moment this is on; older HTLCs can't be
 looked up.
 
-Optional, in the `[routerrpc]` section:
+Recommended, in the `[routerrpc]` section:
 
 ```ini
 [routerrpc]
 ; While Dunder is disconnected, fail new forwards instead of forwarding them
 ; unchecked, and keep HTLCs Dunder was holding so they are replayed when it
 ; reconnects (fewer failed on-demand payments across Dunder restarts).
+; Without it, an lnd restart at the wrong moment can let a payer get a part
+; failed back after Dunder settled it, leaving the receiver short that part.
 ; Cost: the node routes nothing while Dunder is down.
 routerrpc.requireinterceptor=true
 ```
