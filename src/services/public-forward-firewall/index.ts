@@ -4,7 +4,7 @@ import config from "config";
 
 import { handled, HtlcHandler, noDecision, startHtlcInterceptor } from "../htlc-interceptor";
 import { lnrpc, routerrpc } from "../../proto";
-import { listChannels } from "../../utils/lnd-api";
+import { listChannelsRecent } from "../../utils/lnd-api";
 
 const configEnabled = (key: string) => config.has(key) && config.get<boolean>(key);
 
@@ -26,7 +26,9 @@ export function createPublicPublicForwardBlocker(lightning: Client): HtlcHandler
       return cache.publicByChannelId;
     }
 
-    const response = await listChannels(lightning);
+    // Shared for a second: an HTLC naming a channel ID that doesn't exist
+    // forces a reload, and anyone can route such HTLCs here for free.
+    const response = await listChannelsRecent(lightning);
     const publicByChannelId = new Map<string, boolean>();
     for (const channel of response.channels) {
       const isPublic = !channel.private;

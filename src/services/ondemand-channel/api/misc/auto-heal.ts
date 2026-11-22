@@ -9,10 +9,20 @@ import { subscribeWithReconnect } from "../../../../utils/reconnecting-stream";
 import { openChannelForSettledHtlcs } from "../../channel-open";
 import { isChannelOpeningEnabled } from "../utils";
 
+/**
+ * A wallet whose payout is blocked (by a pending channel of its own, for
+ * example) runs the whole payout check, several lnd calls including
+ * ClosedChannels, every time it reconnects. It can reconnect in a loop, so
+ * the check runs at most this often per wallet.
+ */
+export const AUTO_HEAL_MIN_INTERVAL_MS = 10_000;
+const lastAutoHealAt = new Map<string, number>();
+
 export async function openAutoHealChannelIfNeeded(
   db: Database,
   lightning: Client,
   pubkey: string,
+  now = Date.now(),
 ) {
   if (!isChannelOpeningEnabled()) {
     return;
@@ -23,6 +33,16 @@ export async function openAutoHealChannelIfNeeded(
   if ((await getChannelRequestUnclaimedAmount(db, pubkey)) === 0) {
     return;
   }
+
+  for (const [key, at] of lastAutoHealAt) {
+    if (now - at >= AUTO_HEAL_MIN_INTERVAL_MS) {
+      lastAutoHealAt.delete(key);
+    }
+  }
+  if (lastAutoHealAt.has(pubkey)) {
+    return;
+  }
+  lastAutoHealAt.set(pubkey, now);
 
   const allowZeroConfChannels = config.get<boolean>("allowZeroConfChannels") || false;
   const allowTaprootChannels = config.get<boolean>("allowTaprootChannels") || false;
