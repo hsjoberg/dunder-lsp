@@ -62,6 +62,7 @@ export const __setListChannelsError = (error: Error | null) => {
 export async function listChannels(lightning: Client) {
   return __listChannels();
 }
+export const listChannelsRecent = listChannels;
 
 let pendingChannelsResponse = lnrpc.PendingChannelsResponse.create({
   pendingOpenChannels: [],
@@ -103,6 +104,9 @@ export function subscribeChannelEvents(lightning: Client) {
 export const checkPeerConnected = jest.fn(() => {
   return true;
 });
+// Goes through checkPeerConnected, so tests control both with one mock.
+export const checkPeerConnectedRecent = (lightning: Client, pubkey: string) =>
+  (checkPeerConnected as jest.Mock)(lightning, pubkey);
 
 export function subscribePeerEvents(lightning: Client) {
   return new Stream();

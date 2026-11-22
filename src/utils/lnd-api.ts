@@ -78,7 +78,9 @@ export async function verifyMessage(lightning: Client, message: string, signatur
 }
 
 export async function listPeers(lightning: Client) {
-  const listPeersRequest = lnrpc.ListPeersRequest.encode({}).finish();
+  // Only each peer's latest error: lnd keeps up to 10 per peer, and peers
+  // choose their size.
+  const listPeersRequest = lnrpc.ListPeersRequest.encode({ latestError: true }).finish();
   const response = await grpcMakeUnaryRequest<lnrpc.ListPeersResponse>(
     lightning,
     "/lnrpc.Lightning/ListPeers",
@@ -211,8 +213,49 @@ export function subscribeChannelEvents(lightning: Client) {
   );
 }
 
+/**
+ * Wraps a list call so callers within `ttlMs` share one answer. Every incoming
+ * part checks the peer and channel lists, and anyone who has seen an invoice
+ * can send parts, so these calls are shared rather than repeated per part.
+ */
+export function cachedFor<T>(ttlMs: number, load: (lightning: Client) => Promise<T>) {
+  const cache = new WeakMap<Client, { expiresAt: number; value: Promise<T> }>();
+  return (lightning: Client, now = Date.now()) => {
+    const entry = cache.get(lightning);
+    if (entry && entry.expiresAt > now) {
+      return entry.value;
+    }
+    const value = load(lightning);
+    cache.set(lightning, { expiresAt: now + ttlMs, value });
+    value.catch(() => {
+      if (cache.get(lightning)?.value === value) {
+        cache.delete(lightning);
+      }
+    });
+    return value;
+  };
+}
+
+const LIST_CACHE_MS = 1000;
+/** ListPeers, shared for up to a second. */
+export const listPeersRecent = cachedFor(LIST_CACHE_MS, listPeers);
+/** ListChannels, shared for up to a second. Not for checks that need the current state. */
+export const listChannelsRecent = cachedFor(LIST_CACHE_MS, listChannels);
+
 export async function checkPeerConnected(lightning: Client, pubkey: string) {
-  const listPeersResponse = await listPeers(lightning);
+  return isPeerListed(await listPeers(lightning), pubkey);
+}
+
+/**
+ * Like checkPeerConnected, on a peer list up to a second old. For incoming
+ * parts only: a wallet that just connected and registers needs the current
+ * list.
+ */
+export async function checkPeerConnectedRecent(lightning: Client, pubkey: string) {
+  return isPeerListed(await listPeersRecent(lightning), pubkey);
+}
+
+function isPeerListed(listPeersResponse: lnrpc.ListPeersResponse, pubkey: string) {
   const seekPeer = listPeersResponse.peers.find((peer) => {
     return peer.pubKey === pubkey;
   });
