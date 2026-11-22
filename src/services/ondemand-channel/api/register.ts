@@ -303,6 +303,14 @@ type HeldPayment = {
 
 const heldPayments = new Map<string, HeldPayment>();
 
+/**
+ * How long a settled payment stays in `heldPayments`. An HTLC offer for one of
+ * its parts (lnd's single on-chain offer, for example) can be checked against
+ * the database just before the parts are recorded and reach the held payment
+ * only after; while it stays here, the handler answers that offer SETTLE.
+ */
+export const SETTLED_PAYMENT_KEEP_MS = 60_000;
+
 function totalMsat(payment: HeldPayment) {
   let total = BigInt(0);
   for (const part of payment.parts.values()) {
@@ -740,9 +748,12 @@ async function settleHeldPayment(
   }
 
   payment.settleSent = true;
-  if (heldPayments.get(payment.channelId) === payment) {
-    heldPayments.delete(payment.channelId);
-  }
+  payment.timer = setTimeout(() => {
+    if (heldPayments.get(payment.channelId) === payment) {
+      heldPayments.delete(payment.channelId);
+    }
+  }, SETTLED_PAYMENT_KEEP_MS);
+  payment.timer.unref?.();
   console.log("Settling parts", {
     channelId: payment.channelId,
     parts: parts.map((part) => `${part.incomingChannelId}:${part.htlcId}`),
