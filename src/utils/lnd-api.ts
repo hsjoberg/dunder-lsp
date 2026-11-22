@@ -243,7 +243,19 @@ export const listPeersRecent = cachedFor(LIST_CACHE_MS, listPeers);
 export const listChannelsRecent = cachedFor(LIST_CACHE_MS, listChannels);
 
 export async function checkPeerConnected(lightning: Client, pubkey: string) {
-  const listPeersResponse = await listPeersRecent(lightning);
+  return isPeerListed(await listPeers(lightning), pubkey);
+}
+
+/**
+ * Like checkPeerConnected, on a peer list up to a second old. For incoming
+ * parts only: a wallet that just connected and registers needs the current
+ * list.
+ */
+export async function checkPeerConnectedRecent(lightning: Client, pubkey: string) {
+  return isPeerListed(await listPeersRecent(lightning), pubkey);
+}
+
+function isPeerListed(listPeersResponse: lnrpc.ListPeersResponse, pubkey: string) {
   const seekPeer = listPeersResponse.peers.find((peer) => {
     return peer.pubKey === pubkey;
   });

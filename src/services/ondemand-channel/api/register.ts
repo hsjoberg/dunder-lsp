@@ -26,6 +26,7 @@ import {
 } from "./utils";
 import {
   checkPeerConnected,
+  checkPeerConnectedRecent,
   estimateFee,
   getInfo,
   listChannels,
@@ -573,7 +574,7 @@ export const createOnDemandChannelHtlcHandler = (
   }
 
   const alreadyPaid = await hasHtlcSettlements(db, channelId);
-  const peerConnected = await checkPeerConnected(lightning, channelRequest.pubkey);
+  const peerConnected = await checkPeerConnectedRecent(lightning, channelRequest.pubkey);
   const expiryProblem = await checkHtlcExpiry(lightning, request);
   const incomingChannel = await findOpenChannel(lightning, incomingChannelId);
   const incomingChannelPoint = incomingChannel?.channelPoint;

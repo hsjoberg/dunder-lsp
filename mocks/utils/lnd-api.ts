@@ -104,6 +104,9 @@ export function subscribeChannelEvents(lightning: Client) {
 export const checkPeerConnected = jest.fn(() => {
   return true;
 });
+// Goes through checkPeerConnected, so tests control both with one mock.
+export const checkPeerConnectedRecent = (lightning: Client, pubkey: string) =>
+  (checkPeerConnected as jest.Mock)(lightning, pubkey);
 
 export function subscribePeerEvents(lightning: Client) {
   return new Stream();
