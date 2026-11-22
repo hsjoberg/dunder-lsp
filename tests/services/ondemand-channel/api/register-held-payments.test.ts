@@ -15,13 +15,14 @@ import {
   REQUEST_EXPIRY_GRACE_SECONDS,
 } from "../../../../src/services/ondemand-channel/api/register";
 import { HtlcResponseWriter } from "../../../../src/services/htlc-interceptor";
-import { routerrpc } from "../../../../src/proto";
+import { lnrpc, routerrpc } from "../../../../src/proto";
 import { bytesToHexString, sha256Buffer } from "../../../../src/utils/common";
 import { MSAT } from "../../../../src/utils/constants";
 import { createPreimage } from "./register-helpers";
 
 import {
   __MOCK_BLOCK_HEIGHT,
+  __listChannelsRecent,
   __setListChannelsResponse,
   checkPeerConnected,
   openChannelSync,
@@ -468,6 +469,29 @@ describe("held multi-part payments", () => {
       const atLimit = writer();
       await handler(htlc(354, "311", "2"), atLimit);
       expect(atLimit.actions).toEqual([]);
+    } finally {
+      __setListChannelsResponse({ channels: [] });
+    }
+  });
+
+  test("a part over a channel missing from the shared list is checked against a fresh one", async () => {
+    const { handler, htlc } = await setup({ amountSat: 20_000 });
+    __setListChannelsResponse({
+      channels: [
+        {
+          chanId: Long.fromValue(331),
+          channelPoint: "ee:0",
+          localConstraints: { dustLimitSat: Long.fromValue(354, true) },
+        },
+      ],
+    });
+    // The shared list is from before the channel opened.
+    __listChannelsRecent.mockResolvedValueOnce(lnrpc.ListChannelsResponse.create({ channels: [] }));
+    try {
+      // Only the fresh list knows the channel's dust limit.
+      const dust = writer();
+      await handler(htlc(353, "331", "1"), dust);
+      expect(dust.actions).toEqual([FAIL]);
     } finally {
       __setListChannelsResponse({ channels: [] });
     }

@@ -62,7 +62,9 @@ export const __setListChannelsError = (error: Error | null) => {
 export async function listChannels(lightning: Client) {
   return __listChannels();
 }
-export const listChannelsRecent = listChannels;
+// Separate, so a test can make the shared list stale.
+export const __listChannelsRecent = jest.fn((lightning: Client) => listChannels(lightning));
+export const listChannelsRecent = (lightning: Client) => __listChannelsRecent(lightning);
 
 let pendingChannelsResponse = lnrpc.PendingChannelsResponse.create({
   pendingOpenChannels: [],

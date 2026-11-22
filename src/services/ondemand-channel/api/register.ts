@@ -339,18 +339,28 @@ function failHeldPayment(payment: HeldPayment, reason: string) {
 /** The channel point of the open channel with this ID (or alias ID), if any. */
 async function findOpenChannel(lightning: Client, chanId: string) {
   try {
-    const { channels } = await listChannelsRecent(lightning);
-    for (const channel of channels as lnrpc.Channel[]) {
-      const ids = [channel.chanId, channel.zeroConfConfirmedScid, ...(channel.aliasScids ?? [])];
-      if (ids.some((id) => id && id.toString() === chanId)) {
-        return {
-          channelPoint: channel.channelPoint,
-          dustLimitSat: BigInt(channel.localConstraints?.dustLimitSat?.toString() ?? "0"),
-        };
-      }
-    }
+    return (
+      findChannel(await listChannelsRecent(lightning), chanId) ??
+      // Not in the shared list: a channel opened within the last second (or
+      // one that just closed). Parts only arrive over real channels, so this
+      // extra call can't be triggered at will the way unknown IDs could.
+      findChannel(await listChannels(lightning), chanId)
+    );
   } catch (error) {
     console.error("Could not list channels", error);
+  }
+  return undefined;
+}
+
+function findChannel({ channels }: lnrpc.ListChannelsResponse, chanId: string) {
+  for (const channel of channels as lnrpc.Channel[]) {
+    const ids = [channel.chanId, channel.zeroConfConfirmedScid, ...(channel.aliasScids ?? [])];
+    if (ids.some((id) => id && id.toString() === chanId)) {
+      return {
+        channelPoint: channel.channelPoint,
+        dustLimitSat: BigInt(channel.localConstraints?.dustLimitSat?.toString() ?? "0"),
+      };
+    }
   }
   return undefined;
 }
