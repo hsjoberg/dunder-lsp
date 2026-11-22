@@ -5,6 +5,7 @@ import getDb from "../../../../src/db/db";
 import {
   createChannelRequest,
   getHtlcSettlementByCircuitKey,
+  hasHtlcSettlements,
 } from "../../../../src/db/ondemand-channel";
 import {
   createOnDemandChannelHtlcHandler,
@@ -14,13 +15,14 @@ import {
   REQUEST_EXPIRY_GRACE_SECONDS,
 } from "../../../../src/services/ondemand-channel/api/register";
 import { HtlcResponseWriter } from "../../../../src/services/htlc-interceptor";
-import { routerrpc } from "../../../../src/proto";
+import { lnrpc, routerrpc } from "../../../../src/proto";
 import { bytesToHexString, sha256Buffer } from "../../../../src/utils/common";
 import { MSAT } from "../../../../src/utils/constants";
 import { createPreimage } from "./register-helpers";
 
 import {
   __MOCK_BLOCK_HEIGHT,
+  __listChannelsRecent,
   __setListChannelsResponse,
   checkPeerConnected,
   openChannelSync,
@@ -360,8 +362,10 @@ describe("held multi-part payments", () => {
     release();
     await secondHandled;
     await waitFor(() => second.actions.length > 0);
-    // Failed back to the payer, not settled and not recorded.
-    expect(second.actions).toEqual([FAIL]);
+    // Failed back to the payer, not settled and not recorded. The settled
+    // payment is still kept, so it is turned away as "already being settled"
+    // (lnd fails the resumed HTLC with unknown_next_peer).
+    expect(second.actions).toEqual([RESUME]);
     const rows = await db.all(
       "SELECT incomingChannelId FROM htlcSettlement WHERE channelId = ?",
       channelId,
@@ -389,6 +393,33 @@ describe("held multi-part payments", () => {
     } finally {
       errors.mockRestore();
     }
+  });
+
+  test("an on-chain offer that races the recording of its payment is still settled", async () => {
+    const { db, channelId, handler, htlc } = await setup({ amountSat: 20_000 });
+    const held = writer();
+    await handler(htlc(10_000, "321", "1"), held);
+
+    // lnd's single on-chain offer for the held part. Its handler checks the
+    // database (nothing recorded yet), then stalls in its lnd lookups.
+    let release!: () => void;
+    (checkPeerConnected as jest.Mock).mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => (release = () => resolve(true))),
+    );
+    const onChain = Object.assign(writer(), { onChain: true });
+    const offer = handler(htlc(10_000, "321", "1"), onChain);
+    await waitFor(() => release !== undefined);
+
+    // Meanwhile the last part arrives and the payment is recorded and settled.
+    const last = writer();
+    await handler(htlc(10_000, "322", "1"), last);
+    await waitFor(() => last.actions.length > 0);
+    expect(last.actions).toEqual([SETTLE]);
+    expect(await hasHtlcSettlements(db, channelId)).toBe(true);
+
+    release();
+    await offer;
+    expect(onChain.actions).toEqual([SETTLE]);
   });
 
   test("a held part whose channel closed meanwhile is left for lnd's on-chain offer", async () => {
@@ -438,6 +469,29 @@ describe("held multi-part payments", () => {
       const atLimit = writer();
       await handler(htlc(354, "311", "2"), atLimit);
       expect(atLimit.actions).toEqual([]);
+    } finally {
+      __setListChannelsResponse({ channels: [] });
+    }
+  });
+
+  test("a part over a channel missing from the shared list is checked against a fresh one", async () => {
+    const { handler, htlc } = await setup({ amountSat: 20_000 });
+    __setListChannelsResponse({
+      channels: [
+        {
+          chanId: Long.fromValue(331),
+          channelPoint: "ee:0",
+          localConstraints: { dustLimitSat: Long.fromValue(354, true) },
+        },
+      ],
+    });
+    // The shared list is from before the channel opened.
+    __listChannelsRecent.mockResolvedValueOnce(lnrpc.ListChannelsResponse.create({ channels: [] }));
+    try {
+      // Only the fresh list knows the channel's dust limit.
+      const dust = writer();
+      await handler(htlc(353, "331", "1"), dust);
+      expect(dust.actions).toEqual([FAIL]);
     } finally {
       __setListChannelsResponse({ channels: [] });
     }

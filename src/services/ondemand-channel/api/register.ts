@@ -303,6 +303,14 @@ type HeldPayment = {
 
 const heldPayments = new Map<string, HeldPayment>();
 
+/**
+ * How long a settled payment stays in `heldPayments`. An HTLC offer for one of
+ * its parts (lnd's single on-chain offer, for example) can be checked against
+ * the database just before the parts are recorded and reach the held payment
+ * only after; while it stays here, the handler answers that offer SETTLE.
+ */
+export const SETTLED_PAYMENT_KEEP_MS = 60_000;
+
 function totalMsat(payment: HeldPayment) {
   let total = BigInt(0);
   for (const part of payment.parts.values()) {
@@ -331,18 +339,28 @@ function failHeldPayment(payment: HeldPayment, reason: string) {
 /** The channel point of the open channel with this ID (or alias ID), if any. */
 async function findOpenChannel(lightning: Client, chanId: string) {
   try {
-    const { channels } = await listChannelsRecent(lightning);
-    for (const channel of channels as lnrpc.Channel[]) {
-      const ids = [channel.chanId, channel.zeroConfConfirmedScid, ...(channel.aliasScids ?? [])];
-      if (ids.some((id) => id && id.toString() === chanId)) {
-        return {
-          channelPoint: channel.channelPoint,
-          dustLimitSat: BigInt(channel.localConstraints?.dustLimitSat?.toString() ?? "0"),
-        };
-      }
-    }
+    return (
+      findChannel(await listChannelsRecent(lightning), chanId) ??
+      // Not in the shared list: a channel opened within the last second (or
+      // one that just closed). Parts only arrive over real channels, so this
+      // extra call can't be triggered at will the way unknown IDs could.
+      findChannel(await listChannels(lightning), chanId)
+    );
   } catch (error) {
     console.error("Could not list channels", error);
+  }
+  return undefined;
+}
+
+function findChannel({ channels }: lnrpc.ListChannelsResponse, chanId: string) {
+  for (const channel of channels as lnrpc.Channel[]) {
+    const ids = [channel.chanId, channel.zeroConfConfirmedScid, ...(channel.aliasScids ?? [])];
+    if (ids.some((id) => id && id.toString() === chanId)) {
+      return {
+        channelPoint: channel.channelPoint,
+        dustLimitSat: BigInt(channel.localConstraints?.dustLimitSat?.toString() ?? "0"),
+      };
+    }
   }
   return undefined;
 }
@@ -740,9 +758,12 @@ async function settleHeldPayment(
   }
 
   payment.settleSent = true;
-  if (heldPayments.get(payment.channelId) === payment) {
-    heldPayments.delete(payment.channelId);
-  }
+  payment.timer = setTimeout(() => {
+    if (heldPayments.get(payment.channelId) === payment) {
+      heldPayments.delete(payment.channelId);
+    }
+  }, SETTLED_PAYMENT_KEEP_MS);
+  payment.timer.unref?.();
   console.log("Settling parts", {
     channelId: payment.channelId,
     parts: parts.map((part) => `${part.incomingChannelId}:${part.htlcId}`),
