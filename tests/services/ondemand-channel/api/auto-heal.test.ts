@@ -4,7 +4,10 @@ import {
   createHtlcSettlement,
 } from "../../../../src/db/ondemand-channel";
 import { lnrpc } from "../../../../src/proto";
-import { openAutoHealChannelIfNeeded } from "../../../../src/services/ondemand-channel/api/misc/auto-heal";
+import {
+  AUTO_HEAL_MIN_INTERVAL_MS,
+  openAutoHealChannelIfNeeded,
+} from "../../../../src/services/ondemand-channel/api/misc/auto-heal";
 import { stringToUint8Array } from "../../../../src/utils/common";
 import {
   __listChannels,
@@ -72,5 +75,48 @@ describe("auto-heal", () => {
     expect(openChannelSync).toBeCalledTimes(1);
     expect((openChannelSync as jest.Mock).mock.calls[0][5]).toBe(true);
     expect((openChannelSync as jest.Mock).mock.calls[0][6]).toBe(true);
+  });
+
+  test("runs at most once per interval for a wallet whose payout stays blocked", async () => {
+    const db = await getDb(true);
+    const pubkey = "auto-heal-blocked";
+    await createChannelRequest(db, {
+      channelId: "auto-heal-blocked-channel",
+      pubkey,
+      preimage: "auto-heal-blocked-preimage",
+      status: "REGISTERED",
+      start: 0,
+      expire: 600,
+      expectedAmountSat: 5000,
+      channelPoint: null,
+    });
+    await createHtlcSettlement(db, {
+      channelId: "auto-heal-blocked-channel",
+      incomingChannelId: "2",
+      htlcId: "1",
+      amountSat: 5000,
+      settled: 1,
+      claimed: 0,
+    });
+    // The wallet keeps a channel of its own pending, which blocks the payout.
+    __setPendingChannelsResponse({
+      pendingOpenChannels: [{ channel: { remoteNodePub: pubkey, channelPoint: "dd:0" } }],
+    });
+
+    const start = 1_000_000;
+    await openAutoHealChannelIfNeeded(db, {} as any, pubkey, start);
+    expect(__pendingChannels).toBeCalled();
+    expect(openChannelSync).not.toBeCalled();
+
+    __pendingChannels.mockClear();
+    for (let i = 1; i <= 5; i++) {
+      await expect(
+        openAutoHealChannelIfNeeded(db, {} as any, pubkey, start + i * 1000),
+      ).resolves.toBeUndefined();
+    }
+    expect(__pendingChannels).not.toBeCalled();
+
+    await openAutoHealChannelIfNeeded(db, {} as any, pubkey, start + AUTO_HEAL_MIN_INTERVAL_MS);
+    expect(__pendingChannels).toBeCalled();
   });
 });
