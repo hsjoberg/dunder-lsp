@@ -32,6 +32,10 @@ export const GRPC_CHANNEL_OPTIONS = {
   "grpc.keepalive_time_ms": 60_000,
   "grpc.keepalive_timeout_ms": 20_000,
   "grpc.keepalive_permit_without_calls": 0,
+  // grpc-js refuses answers over 4 MB by default. Lists like ListPeers and
+  // ClosedChannels grow with the node (and peers can pad ListPeers with error
+  // messages), so use lnd's own client limit.
+  "grpc.max_receive_message_length": 200 * 1024 * 1024,
 };
 
 /**

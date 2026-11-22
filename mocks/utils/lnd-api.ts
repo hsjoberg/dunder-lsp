@@ -62,6 +62,7 @@ export const __setListChannelsError = (error: Error | null) => {
 export async function listChannels(lightning: Client) {
   return __listChannels();
 }
+export const listChannelsRecent = listChannels;
 
 let pendingChannelsResponse = lnrpc.PendingChannelsResponse.create({
   pendingOpenChannels: [],

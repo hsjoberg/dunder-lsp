@@ -29,6 +29,7 @@ import {
   estimateFee,
   getInfo,
   listChannels,
+  listChannelsRecent,
   subscribeHtlcEvents,
 } from "../../../utils/lnd-api";
 import { handled, HtlcHandler, HtlcResponseWriter, noDecision } from "../../htlc-interceptor";
@@ -329,7 +330,7 @@ function failHeldPayment(payment: HeldPayment, reason: string) {
 /** The channel point of the open channel with this ID (or alias ID), if any. */
 async function findOpenChannel(lightning: Client, chanId: string) {
   try {
-    const { channels } = await listChannels(lightning);
+    const { channels } = await listChannelsRecent(lightning);
     for (const channel of channels as lnrpc.Channel[]) {
       const ids = [channel.chanId, channel.zeroConfConfirmedScid, ...(channel.aliasScids ?? [])];
       if (ids.some((id) => id && id.toString() === chanId)) {
