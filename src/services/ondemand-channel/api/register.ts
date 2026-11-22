@@ -327,13 +327,16 @@ function failHeldPayment(payment: HeldPayment, reason: string) {
 }
 
 /** The channel point of the open channel with this ID (or alias ID), if any. */
-async function findOpenChannelPoint(lightning: Client, chanId: string) {
+async function findOpenChannel(lightning: Client, chanId: string) {
   try {
     const { channels } = await listChannels(lightning);
     for (const channel of channels as lnrpc.Channel[]) {
       const ids = [channel.chanId, channel.zeroConfConfirmedScid, ...(channel.aliasScids ?? [])];
       if (ids.some((id) => id && id.toString() === chanId)) {
-        return channel.channelPoint;
+        return {
+          channelPoint: channel.channelPoint,
+          dustLimitSat: BigInt(channel.localConstraints?.dustLimitSat?.toString() ?? "0"),
+        };
       }
     }
   } catch (error) {
@@ -571,7 +574,8 @@ export const createOnDemandChannelHtlcHandler = (
   const alreadyPaid = await hasHtlcSettlements(db, channelId);
   const peerConnected = await checkPeerConnected(lightning, channelRequest.pubkey);
   const expiryProblem = await checkHtlcExpiry(lightning, request);
-  const incomingChannelPoint = await findOpenChannelPoint(lightning, incomingChannelId);
+  const incomingChannel = await findOpenChannel(lightning, incomingChannelId);
+  const incomingChannelPoint = incomingChannel?.channelPoint;
 
   // Everything below runs without awaiting, so the held payment can't change
   // underneath it.
@@ -606,6 +610,13 @@ export const createOnDemandChannelHtlcHandler = (
   }
   if (expiryProblem) {
     return fail(expiryProblem);
+  }
+  // A dust part has no output on Dunder's commitment, so it can't be claimed
+  // on-chain if the payer stalls it after Dunder settled, and the deadline
+  // guard skips it, leaving the whole request unpaid. Honest payments don't
+  // split this small.
+  if (incomingChannel && incomingAmountMsat < incomingChannel.dustLimitSat * MSAT_PER_SAT) {
+    return fail("Part is below the incoming channel's dust limit");
   }
 
   const expectedMsat = BigInt(channelRequest.expectedAmountSat) * MSAT_PER_SAT;

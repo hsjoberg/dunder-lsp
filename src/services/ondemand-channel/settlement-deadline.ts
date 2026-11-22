@@ -47,27 +47,6 @@ const reportedOverdue = new Set<string>();
  * finally settled, when that part expires within the deadline. Returns the
  * channel points it closed.
  */
-/** BOLT 3: weight of an HTLC-success transaction on a non-anchor channel. */
-const HTLC_SUCCESS_WEIGHT = 703;
-
-/**
- * Incoming HTLCs below this amount have no output on Dunder's commitment. On
- * channels without anchors the second-level transaction pays its own fee, and
- * lnd also trims HTLCs that can't cover it.
- */
-export function trimmedBelowSat(channel: lnrpc.IChannel) {
-  const dustLimitSat = Number(channel.localConstraints?.dustLimitSat ?? 0);
-  const commitmentType = channel.commitmentType;
-  if (
-    commitmentType === lnrpc.CommitmentType.LEGACY ||
-    commitmentType === lnrpc.CommitmentType.STATIC_REMOTE_KEY
-  ) {
-    const feePerKw = Number(channel.feePerKw ?? 0);
-    return dustLimitSat + Math.floor((feePerKw * HTLC_SUCCESS_WEIGHT) / 1000);
-  }
-  return dustLimitSat;
-}
-
 export async function forceCloseChannelsWithStalledSettlements(db: Database, lightning: Client) {
   const unsettled = (await getUnsettledHtlcSettlements(db)).filter(
     (settlement) => settlement.incomingExpiry != null,
@@ -114,7 +93,10 @@ export async function forceCloseChannelsWithStalledSettlements(db: Database, lig
     // Only parts whose HTLC is still pending on the channel. A part that was
     // locked in (and only its final event was missed) is no longer there.
     // Dust HTLCs have no output on Dunder's commitment, so nothing to claim.
-    const dustLimitSat = trimmedBelowSat(channel);
+    // Only the dust limit counts, not the HTLC transaction's fee that older
+    // channels also trim by: the channel opener sets that fee rate, so a payer
+    // that opened the channel could raise it to make the guard skip its part.
+    const dustLimitSat = Number(channel.localConstraints?.dustLimitSat ?? 0);
     const stalled = due.filter(
       (settlement) =>
         ids.has(settlement.incomingChannelId) &&

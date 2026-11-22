@@ -19,13 +19,15 @@ assertEnvironment();
  * CORS preflight (OPTIONS) matches @fastify/cors's catch-all route instead.
  */
 export function isAdminPath(routeUrl: string | undefined, rawUrl: string) {
-  let decoded = rawUrl;
+  const rawPath = rawUrl.split("?")[0];
+  let decoded: string;
   try {
-    decoded = decodeURIComponent(rawUrl);
+    decoded = decodeURIComponent(rawPath);
   } catch {
-    // Malformed encoding; the raw URL is checked anyway.
+    // A path that can't be decoded: no CORS for it.
+    return true;
   }
-  return [routeUrl ?? "", rawUrl, decoded].some((url) => url.startsWith("/admin"));
+  return [routeUrl ?? "", rawPath, decoded].some((url) => url.startsWith("/admin"));
 }
 
 export default function (options?: FastifyServerOptions) {
@@ -36,6 +38,14 @@ export default function (options?: FastifyServerOptions) {
     ...options,
   });
   registerIpRateLimit(app);
+  // The admin session is only loaded for URLs that start with /admin as sent,
+  // so an encoded path (/%61dmin/...) would reach admin routes without it.
+  app.addHook("onRequest", async (request, reply) => {
+    if (request.routeOptions.url?.startsWith("/admin") && !request.url.startsWith("/admin")) {
+      reply.code(404).send({ status: "ERROR", reason: "Not found" });
+      return reply;
+    }
+  });
   // The public wallet API may be called from browsers. The admin interface is
   // same-origin only and never gets CORS headers.
   app.register(fastifyCors, {

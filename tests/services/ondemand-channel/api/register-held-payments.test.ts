@@ -419,6 +419,30 @@ describe("held multi-part payments", () => {
     }
   });
 
+  test("a part below the incoming channel's dust limit is failed", async () => {
+    const { handler, htlc } = await setup({ amountSat: 20_000 });
+    __setListChannelsResponse({
+      channels: [
+        {
+          chanId: Long.fromValue(311),
+          channelPoint: "cc:0",
+          localConstraints: { dustLimitSat: Long.fromValue(354, true) },
+        },
+      ],
+    });
+    try {
+      const dust = writer();
+      await handler(htlc(353, "311", "1"), dust);
+      expect(dust.actions).toEqual([FAIL]);
+
+      const atLimit = writer();
+      await handler(htlc(354, "311", "2"), atLimit);
+      expect(atLimit.actions).toEqual([]);
+    } finally {
+      __setListChannelsResponse({ channels: [] });
+    }
+  });
+
   test("a wrong payment hash is failed with a code lnd accepts", async () => {
     const { handler, htlc } = await setup();
     const part = writer();
