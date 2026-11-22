@@ -406,6 +406,13 @@ export function dropHeldPaymentsAfterStreamReset() {
  * Honest payments have far more room: Dunder's route hint alone adds 40 blocks.
  */
 export const MIN_BLOCKS_BEFORE_AUTO_FAIL = 6;
+/**
+ * lnd limits how far ahead a forwarded HTLC may expire only on the outgoing
+ * channel, and the fake channel ID has none. A part expiring far ahead could
+ * stall its request's payout until then. Payers' lnd refuses routes longer
+ * than 2016 blocks by default.
+ */
+export const MAX_BLOCKS_UNTIL_EXPIRY = 2016;
 const LND_CLTV_REJECT_DELTA = 13;
 const BLOCK_HEIGHT_CACHE_MS = 15_000;
 
@@ -423,10 +430,11 @@ function getCurrentBlockHeight(lightning: Client) {
   return blockHeightCache.height;
 }
 
-async function isTooCloseToAutoFail(
+/** Why an HTLC's expiry rules out holding it, or null when it is fine. */
+async function checkHtlcExpiry(
   lightning: Client,
   request: routerrpc.ForwardHtlcInterceptRequest,
-) {
+): Promise<string | null> {
   const autoFailHeight =
     request.autoFailHeight > 0
       ? request.autoFailHeight
@@ -438,9 +446,15 @@ async function isTooCloseToAutoFail(
     // Without a height the check can't run. lnd itself still refuses HTLCs
     // that are already past the limit when they arrive.
     console.error("Could not get the block height for the HTLC expiry check", error);
-    return false;
+    return null;
   }
-  return autoFailHeight - currentHeight <= MIN_BLOCKS_BEFORE_AUTO_FAIL;
+  if (autoFailHeight - currentHeight <= MIN_BLOCKS_BEFORE_AUTO_FAIL) {
+    return "HTLC expires too soon to be held";
+  }
+  if (request.incomingExpiry - currentHeight > MAX_BLOCKS_UNTIL_EXPIRY) {
+    return "HTLC expires too far ahead";
+  }
+  return null;
 }
 
 function isRequestExpired(channelRequest: IChannelRequestDB, nowUnix: number) {
@@ -556,7 +570,7 @@ export const createOnDemandChannelHtlcHandler = (
 
   const alreadyPaid = await hasHtlcSettlements(db, channelId);
   const peerConnected = await checkPeerConnected(lightning, channelRequest.pubkey);
-  const tooCloseToAutoFail = await isTooCloseToAutoFail(lightning, request);
+  const expiryProblem = await checkHtlcExpiry(lightning, request);
   const incomingChannelPoint = await findOpenChannelPoint(lightning, incomingChannelId);
 
   // Everything below runs without awaiting, so the held payment can't change
@@ -590,8 +604,8 @@ export const createOnDemandChannelHtlcHandler = (
   if (!peerConnected) {
     return fail("Wallet node not connected");
   }
-  if (tooCloseToAutoFail) {
-    return fail("HTLC expires too soon to be held");
+  if (expiryProblem) {
+    return fail(expiryProblem);
   }
 
   const expectedMsat = BigInt(channelRequest.expectedAmountSat) * MSAT_PER_SAT;

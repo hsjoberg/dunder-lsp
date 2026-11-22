@@ -15,6 +15,7 @@ import {
 } from "../../../../utils/common";
 import getDb from "../../../../db/db";
 import { checkAdminPubkey } from "../../../../db/admin";
+import { clientKey } from "../../../ip-rate-limit";
 
 export interface IErrorResponse {
   status: "ERROR";
@@ -27,12 +28,15 @@ interface IUser {
   sessionStore: SessionStore;
   session: FastifyRequest["session"];
   k1: string;
+  client: string;
 }
 const users: Map<WebSocket, IUser> = new Map();
 
 // Login WebSockets can be opened by anyone before logging in, so their number
 // and lifetime are bounded. A login takes a minute or two.
 export const MAX_LOGIN_SOCKETS = 100;
+// Per client address (IPv6: per /64), so one client can't take every slot.
+export const MAX_LOGIN_SOCKETS_PER_CLIENT = 5;
 const LOGIN_SOCKET_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
@@ -95,7 +99,14 @@ const AdminLogin = async function (app, { lightning, router }) {
         socket.close(1008, "Origin not allowed");
         return;
       }
-      if (users.size >= MAX_LOGIN_SOCKETS) {
+      const client = clientKey(request.ip);
+      let fromClient = 0;
+      for (const user of users.values()) {
+        if (user.client === client) {
+          fromClient++;
+        }
+      }
+      if (users.size >= MAX_LOGIN_SOCKETS || fromClient >= MAX_LOGIN_SOCKETS_PER_CLIENT) {
         socket.close(1013, "Too many logins in progress");
         return;
       }
@@ -113,6 +124,7 @@ const AdminLogin = async function (app, { lightning, router }) {
         sessionStore: request.sessionStore,
         session: request.session,
         k1,
+        client,
       });
 
       socket.on("message", (message: any) => {

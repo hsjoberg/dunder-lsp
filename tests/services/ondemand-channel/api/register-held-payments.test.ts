@@ -304,6 +304,29 @@ describe("held multi-part payments", () => {
     expect(part.actions).toEqual([]);
   });
 
+  test("an HTLC expiring more than 2016 blocks ahead is failed", async () => {
+    const { handler, htlc } = await setup();
+    const far = writer();
+    await handler(
+      htlc(10_000, "104", "1", {
+        incomingExpiry: __MOCK_BLOCK_HEIGHT + 2017,
+        autoFailHeight: __MOCK_BLOCK_HEIGHT + 2004,
+      }),
+      far,
+    );
+    expect(far.actions).toEqual([FAIL]);
+
+    const limit = writer();
+    await handler(
+      htlc(10_000, "105", "1", {
+        incomingExpiry: __MOCK_BLOCK_HEIGHT + 2016,
+        autoFailHeight: __MOCK_BLOCK_HEIGHT + 2003,
+      }),
+      limit,
+    );
+    expect(limit.actions).toEqual([]);
+  });
+
   test("without lnd's auto-fail height, it is derived from the incoming expiry", async () => {
     const { handler, htlc } = await setup();
     const part = writer();

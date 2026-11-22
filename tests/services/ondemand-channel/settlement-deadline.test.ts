@@ -7,7 +7,9 @@ import {
   FORCE_CLOSE_BLOCKS_BEFORE_EXPIRY,
   OVERDUE_BLOCKS_AFTER_EXPIRY,
   forceCloseChannelsWithStalledSettlements,
+  trimmedBelowSat,
 } from "../../../src/services/ondemand-channel/settlement-deadline";
+import { lnrpc } from "../../../src/proto";
 import {
   __MOCK_BLOCK_HEIGHT,
   __setListChannelsResponse,
@@ -111,6 +113,28 @@ describe("settlement deadline guard", () => {
 
     expect(await forceCloseChannelsWithStalledSettlements(db, {} as any)).toEqual([]);
     expect(forceCloseChannel).not.toHaveBeenCalled();
+  });
+
+  test("counts the HTLC transaction fee into the dust limit on channels without anchors", () => {
+    const constraints = { localConstraints: { dustLimitSat: Long.fromValue(354, true) } };
+    // 25 sat/vB = 6250 sat/kw; 6250 * 703 / 1000 = 4393.
+    const feePerKw = Long.fromValue(6250, true);
+    expect(
+      trimmedBelowSat({ ...constraints, commitmentType: lnrpc.CommitmentType.LEGACY, feePerKw }),
+    ).toBe(354 + 4393);
+    expect(
+      trimmedBelowSat({
+        ...constraints,
+        commitmentType: lnrpc.CommitmentType.STATIC_REMOTE_KEY,
+        feePerKw,
+      }),
+    ).toBe(354 + 4393);
+    expect(
+      trimmedBelowSat({ ...constraints, commitmentType: lnrpc.CommitmentType.ANCHORS, feePerKw }),
+    ).toBe(354);
+    expect(
+      trimmedBelowSat({ ...constraints, commitmentType: lnrpc.CommitmentType.TAPROOT, feePerKw }),
+    ).toBe(354);
   });
 
   test("warns once about a part with no final outcome long after its expiry", async () => {
