@@ -62,6 +62,31 @@ type Result<T> = { ok: true; value: T } | { ok: false; reason: string; statusCod
 const consumedMessages = new Map<string, number>();
 const requestCounts = new Map<string, { windowStart: number; count: number }>();
 
+/**
+ * Every verified request adds to both maps, so they hold about a minute of
+ * requests. Sweeping them on every request would cost time proportional to
+ * the request rate per request; at most once a second keeps it linear.
+ */
+const SWEEP_INTERVAL_MS = 1000;
+let lastSweepAt = -Infinity;
+
+function sweepExpired(nowMs: number) {
+  if (nowMs - lastSweepAt < SWEEP_INTERVAL_MS && nowMs >= lastSweepAt) {
+    return;
+  }
+  lastSweepAt = nowMs;
+  for (const [digest, expiresAt] of consumedMessages) {
+    if (expiresAt <= nowMs) {
+      consumedMessages.delete(digest);
+    }
+  }
+  for (const [key, entry] of requestCounts) {
+    if (nowMs - entry.windowStart >= RATE_LIMIT_WINDOW_MS) {
+      requestCounts.delete(key);
+    }
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -204,18 +229,14 @@ export async function verifySignedEnvelope(
     };
   }
 
+  sweepExpired(nowMs);
   if (envelope.kind === "MESSAGE") {
-    for (const [digest, expiresAt] of consumedMessages) {
-      if (expiresAt <= nowMs) {
-        consumedMessages.delete(digest);
-      }
-    }
     const digest = createHash("sha256")
       .update(pubkey)
       .update("\0")
       .update(envelope.message)
       .digest("hex");
-    if (consumedMessages.has(digest)) {
+    if ((consumedMessages.get(digest) ?? -Infinity) > nowMs) {
       return { ok: false, reason: "This signed message has already been used." };
     }
     // Kept until the message can no longer pass the timestamp check: its
@@ -232,13 +253,9 @@ export async function verifySignedEnvelope(
 }
 
 function allowRequestForPubkey(pubkey: string, nowMs: number) {
-  for (const [key, entry] of requestCounts) {
-    if (nowMs - entry.windowStart >= RATE_LIMIT_WINDOW_MS) {
-      requestCounts.delete(key);
-    }
-  }
   const entry = requestCounts.get(pubkey);
-  if (!entry) {
+  // An expired window the sweep hasn't removed yet starts over.
+  if (!entry || nowMs - entry.windowStart >= RATE_LIMIT_WINDOW_MS) {
     requestCounts.set(pubkey, { windowStart: nowMs, count: 1 });
     return true;
   }
@@ -250,4 +267,10 @@ function allowRequestForPubkey(pubkey: string, nowMs: number) {
 export function __resetSignedRequestState() {
   consumedMessages.clear();
   requestCounts.clear();
+  lastSweepAt = -Infinity;
+}
+
+/** Test helper. */
+export function __signedRequestStateSize() {
+  return { consumedMessages: consumedMessages.size, requestCounts: requestCounts.size };
 }

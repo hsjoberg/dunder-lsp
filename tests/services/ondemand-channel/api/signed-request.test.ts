@@ -6,6 +6,7 @@ import getDb from "../../../../src/db/db";
 import { getChannelRequest } from "../../../../src/db/ondemand-channel";
 import {
   __resetSignedRequestState,
+  __signedRequestStateSize,
   parseSignedEnvelope,
   verifySignedEnvelope,
 } from "../../../../src/services/ondemand-channel/api/signed-request";
@@ -79,6 +80,26 @@ describe("signed requests", () => {
     // Still within the timestamp check (1060 - 1030 = 30).
     expect(await use(1_060_500)).toMatch(/already been used/);
     expect(await use(1_061_000)).toMatch(/too old/);
+  });
+
+  test("cleans up used messages and rate-limit windows at most once a second", async () => {
+    const use = async (nowMs: number) => {
+      const body = signedBody({ timestamp: Math.floor(nowMs / 1000) });
+      const envelope = parseSignedEnvelope(body, REGISTER, "REGISTER", nowMs);
+      if (!envelope.ok) {
+        throw new Error(envelope.reason);
+      }
+      return verifySignedEnvelope({} as any, envelope.value, nowMs);
+    };
+
+    await use(1_000_000); // sweeps (the first call), then records its message
+    await use(1_000_500); // within a second of that sweep: no sweep
+    expect(__signedRequestStateSize().consumedMessages).toBe(2);
+
+    // Much later: this call sweeps both expired messages and the expired
+    // rate-limit window, then records its own.
+    expect((await use(1_100_000)).ok).toBe(true);
+    expect(__signedRequestStateSize()).toEqual({ consumedMessages: 1, requestCounts: 1 });
   });
 
   test("registers with a signed message and takes the fields from the signed data", async () => {
