@@ -49,6 +49,7 @@ type OpenSettledHtlcsOptions = {
   pubkey: string;
   source: ChannelOpenAttemptSource;
   requestedChannelId?: string;
+  /** The least the selected settlements must add up to (a payment may overshoot). */
   requiredAmountSat?: number;
   zeroConf: boolean;
   taprootChannel: boolean;

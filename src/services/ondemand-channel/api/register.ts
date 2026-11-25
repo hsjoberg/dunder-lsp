@@ -671,10 +671,19 @@ export const createOnDemandChannelHtlcHandler = (
     return fail("Part is below the incoming channel's dust limit");
   }
 
+  // Like lnd's own invoices (invoices/update.go, updateMpp), the payment is
+  // complete once its parts add up to at least the expected amount, and a
+  // part that overshoots is accepted: the extra goes to the receiver. Refusing
+  // it instead would let anyone who knows the invoice block the payment with
+  // one small part. lnd also checks each part's MPP total; that record is in
+  // the receiver's onion layer, which Dunder can't read, so the registered
+  // amount stands in for it. Unlike lnd, the total is capped: the payout
+  // channel can't push more than the maximum payment.
   const expectedMsat = BigInt(channelRequest.expectedAmountSat) * MSAT_PER_SAT;
+  const maximumMsat = BigInt(Math.max(getMaximumPaymentSat(), channelRequest.expectedAmountSat)) * MSAT_PER_SAT;
   const currentMsat = payment ? totalMsat(payment) : BigInt(0);
-  if (currentMsat + amountMsat > expectedMsat) {
-    return failAsUnknownChannel("Part would exceed the expected amount");
+  if (currentMsat + amountMsat > maximumMsat) {
+    return failAsUnknownChannel("Part would exceed the maximum payment");
   }
 
   if (!payment) {
@@ -713,7 +722,7 @@ export const createOnDemandChannelHtlcHandler = (
     expectedMsat: expectedMsat.toString(),
   });
 
-  if (total === expectedMsat) {
+  if (total >= expectedMsat) {
     payment.state = "SETTLING";
     clearTimeout(payment.timer);
     settleHeldPayment(db, lightning, channelRequest, payment, preimage).catch((error) => {
