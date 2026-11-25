@@ -506,7 +506,7 @@ describe("held multi-part payments", () => {
   });
 
   test("a held part whose channel closed meanwhile is left for lnd's on-chain offer", async () => {
-    const { handler, htlc } = await setup({ amountSat: 20_000 });
+    const { db, handler, htlc } = await setup({ amountSat: 20_000 });
     __setListChannelsResponse({
       channels: [
         { chanId: Long.fromValue(301), channelPoint: "aa:0" },
@@ -528,6 +528,10 @@ describe("held multi-part payments", () => {
       // Answering it would end the stream ("edge not found"). lnd offers it
       // again on-chain, where the recorded part is settled.
       expect(first.actions).toEqual([]);
+      // Each part records its channel, so the guard can bump the close.
+      expect((await getHtlcSettlementByCircuitKey(db, "301", "1"))?.incomingChannelPoint).toBe(
+        "aa:0",
+      );
     } finally {
       __setListChannelsResponse({ channels: [] });
     }

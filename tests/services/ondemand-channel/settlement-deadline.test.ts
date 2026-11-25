@@ -4,14 +4,19 @@ import { getUnixTime } from "date-fns";
 import getDb from "../../../src/db/db";
 import { createChannelRequest, createHtlcSettlements } from "../../../src/db/ondemand-channel";
 import {
+  BLOCKS_NEEDED_AFTER_CLOSE,
+  DEFAULT_FEE_BUMP_MAX_SAT,
   FORCE_CLOSE_BLOCKS_BEFORE_EXPIRY,
   OVERDUE_BLOCKS_AFTER_EXPIRY,
+  bumpClosesWithStalledSettlements,
   forceCloseChannelsWithStalledSettlements,
 } from "../../../src/services/ondemand-channel/settlement-deadline";
 import { lnrpc } from "../../../src/proto";
 import {
   __MOCK_BLOCK_HEIGHT,
   __setListChannelsResponse,
+  __setPendingChannelsResponse,
+  bumpForceCloseFee,
   forceCloseChannel,
 } from "../../../mocks/utils/lnd-api";
 
@@ -19,7 +24,11 @@ const INCOMING_CHANNEL = "700000";
 let counter = 0;
 
 /** A request with one part recorded for settlement on INCOMING_CHANNEL, htlc 3. */
-async function recordPart(blocksLeft: number, settled = 0) {
+async function recordPart(
+  blocksLeft: number,
+  settled = 0,
+  { amountSat = 20_000, incomingChannelPoint = "aa".repeat(32) + ":1" } = {},
+) {
   const db = await getDb(true);
   const channelId = String(950_000 + ++counter);
   await createChannelRequest(db, {
@@ -37,14 +46,21 @@ async function recordPart(blocksLeft: number, settled = 0) {
       channelId,
       incomingChannelId: INCOMING_CHANNEL,
       htlcId: "3",
-      amountSat: 20_000,
-      amountMsat: "20000000",
+      amountSat,
+      amountMsat: String(amountSat * 1000),
       incomingExpiry: __MOCK_BLOCK_HEIGHT + blocksLeft,
+      incomingChannelPoint,
       settled,
       claimed: 0,
     },
   ]);
   return db;
+}
+
+function closing(channelPoint: string, commitmentType = lnrpc.CommitmentType.ANCHORS) {
+  __setPendingChannelsResponse({
+    waitingCloseChannels: [{ channel: { channelPoint, commitmentType } }],
+  });
 }
 
 function openChannel(pendingHtlcIndexes: number[], amountSat = 20_000) {
@@ -158,5 +174,77 @@ describe("settlement deadline guard", () => {
     __setListChannelsResponse({ channels: [] });
 
     expect(await forceCloseChannelsWithStalledSettlements(db, {} as any)).toEqual([]);
+  });
+});
+
+describe("fee bumps for closes that hold settled parts", () => {
+  beforeEach(() => {
+    bumpForceCloseFee.mockClear();
+  });
+  afterAll(() => {
+    __setPendingChannelsResponse({ waitingCloseChannels: [] });
+  });
+
+  test("bumps the close to confirm in time for the claim, with half the parts' value as budget", async () => {
+    const channelPoint = "b1".repeat(32) + ":0";
+    const db = await recordPart(FORCE_CLOSE_BLOCKS_BEFORE_EXPIRY, 0, {
+      incomingChannelPoint: channelPoint,
+    });
+    closing(channelPoint);
+
+    expect(await bumpClosesWithStalledSettlements(db, {} as any)).toEqual([channelPoint]);
+    expect(bumpForceCloseFee).toHaveBeenCalledWith(
+      {},
+      channelPoint,
+      FORCE_CLOSE_BLOCKS_BEFORE_EXPIRY - BLOCKS_NEEDED_AFTER_CLOSE,
+      10_000,
+    );
+
+    // Not asked again with the same budget; the deadline is already set.
+    expect(await bumpClosesWithStalledSettlements(db, {} as any)).toEqual([]);
+    expect(bumpForceCloseFee).toHaveBeenCalledTimes(1);
+  });
+
+  test("never budgets more than the configured maximum", async () => {
+    const channelPoint = "b2".repeat(32) + ":0";
+    const db = await recordPart(30, 0, {
+      amountSat: 1_000_000,
+      incomingChannelPoint: channelPoint,
+    });
+    closing(channelPoint);
+
+    await bumpClosesWithStalledSettlements(db, {} as any);
+    expect(bumpForceCloseFee.mock.calls[0][3]).toBe(DEFAULT_FEE_BUMP_MAX_SAT);
+  });
+
+  test("tries again on the next run when lnd can't bump yet", async () => {
+    const channelPoint = "b3".repeat(32) + ":0";
+    const db = await recordPart(30, 0, { incomingChannelPoint: channelPoint });
+    closing(channelPoint);
+    bumpForceCloseFee.mockRejectedValueOnce(new Error("unable to find pending anchor outputs"));
+    const error = jest.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await bumpClosesWithStalledSettlements(db, {} as any)).toEqual([]);
+      expect(await bumpClosesWithStalledSettlements(db, {} as any)).toEqual([channelPoint]);
+      expect(bumpForceCloseFee).toHaveBeenCalledTimes(2);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  test("leaves alone channels without anchors, other channels, and parts lnd settled or that expired", async () => {
+    const channelPoint = "b4".repeat(32) + ":0";
+    // Each case on a fresh database (recordPart reopens it).
+    for (const [settled, blocksLeft, type, point] of [
+      [0, 30, lnrpc.CommitmentType.STATIC_REMOTE_KEY, channelPoint],
+      [0, 30, lnrpc.CommitmentType.ANCHORS, "b5".repeat(32) + ":0"],
+      [1, 30, lnrpc.CommitmentType.ANCHORS, channelPoint],
+      [0, 0, lnrpc.CommitmentType.ANCHORS, channelPoint],
+    ] as const) {
+      const db = await recordPart(blocksLeft, settled, { incomingChannelPoint: channelPoint });
+      closing(point, type);
+      expect(await bumpClosesWithStalledSettlements(db, {} as any)).toEqual([]);
+    }
+    expect(bumpForceCloseFee).not.toHaveBeenCalled();
   });
 });

@@ -38,6 +38,8 @@ export interface IHtlcSettlementDB {
   incomingExpiry?: number | null;
   /** Decimal msat the incoming HTLC carried. */
   incomingAmountMsat?: string | null;
+  /** Funding outpoint ("txid:index") of the incoming channel. */
+  incomingChannelPoint?: string | null;
 }
 
 export async function createChannelRequest(
@@ -168,6 +170,7 @@ export async function createHtlcSettlement(
     claimed,
     incomingExpiry,
     incomingAmountMsat,
+    incomingChannelPoint,
   }: IHtlcSettlementDB,
 ) {
   const storedAmountMsat = amountMsat ?? Long.fromValue(amountSat).mul(MSAT).toString();
@@ -182,7 +185,8 @@ export async function createHtlcSettlement(
         settled,
         claimed,
         incomingExpiry,
-        incomingAmountMsat
+        incomingAmountMsat,
+        incomingChannelPoint
       )
     VALUES
       (
@@ -194,7 +198,8 @@ export async function createHtlcSettlement(
         $settled,
         $claimed,
         $incomingExpiry,
-        $incomingAmountMsat
+        $incomingAmountMsat,
+        $incomingChannelPoint
       )
     `,
     {
@@ -207,6 +212,7 @@ export async function createHtlcSettlement(
       $claimed: claimed,
       $incomingExpiry: incomingExpiry ?? null,
       $incomingAmountMsat: incomingAmountMsat ?? null,
+      $incomingChannelPoint: incomingChannelPoint ?? null,
     },
   );
 }

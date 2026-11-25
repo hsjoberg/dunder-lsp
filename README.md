@@ -113,13 +113,19 @@ lncli bakemacaroon --save_to dunder.macaroon \
   uri:/lnrpc.Lightning/SubscribePeerEvents \
   uri:/lnrpc.Lightning/OpenChannelSync \
   uri:/lnrpc.Lightning/CloseChannel \
+  uri:/walletrpc.WalletKit/BumpForceCloseFee \
   uri:/routerrpc.Router/HtlcInterceptor \
   uri:/routerrpc.Router/SubscribeHtlcEvents
 ```
 
 `CloseChannel` is only used to force-close a channel whose peer took a
 payment's preimage but didn't complete the settlement, shortly before the HTLC
-expires, so lnd can claim it on-chain.
+expires, so lnd can claim it on-chain. `BumpForceCloseFee` gets such a close
+(or one the peer broadcast) confirmed in time for that claim. lnd doesn't bump
+it by itself, since it doesn't know preimages given through the interceptor.
+Each bump's fees are capped at half the stalled payment parts' value and at
+`forceCloseFeeBumpMaxSat` (default 50000). It only works on anchor and taproot
+channels.
 
 Protect this macaroon like an admin macaroon. `OpenChannelSync` can already
 move the on-chain wallet into channels, and `CloseChannel` also allows a

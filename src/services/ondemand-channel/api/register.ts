@@ -779,6 +779,7 @@ async function settleHeldPayment(
         amountMsat: part.amountMsat.toString(),
         incomingAmountMsat: part.incomingAmountMsat.toString(),
         incomingExpiry: part.incomingExpiry,
+        incomingChannelPoint: part.incomingChannelPoint ?? null,
         settled: 0,
         claimed: 0,
       })),

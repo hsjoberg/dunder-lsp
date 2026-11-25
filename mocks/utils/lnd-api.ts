@@ -81,6 +81,11 @@ export const forceCloseChannel = jest.fn(async (lightning: Client, channelPoint:
   lnrpc.CloseStatusUpdate.create({}),
 );
 
+export const bumpForceCloseFee = jest.fn(
+  async (lightning: Client, channelPoint: string, deadlineDelta: number, budgetSat: number) =>
+    undefined,
+);
+
 export const openChannelSync = jest.fn(() => {
   const openChannelSyncResponse = lnrpc.ChannelPoint.create({
     fundingTxidBytes: stringToUint8Array("abcdef"),

@@ -25,5 +25,6 @@
   "maxOpenRequestsPerPubkey": 5,
   "signedRequestRateLimitPerMinute": 30,
   "ipRateLimitPerMinute": 120,
+  "forceCloseFeeBumpMaxSat": 50000,
   "trustProxy": false
 }
