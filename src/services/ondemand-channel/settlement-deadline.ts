@@ -187,6 +187,17 @@ function getFeeBumpMaxSat() {
 const bumped = new Map<string, number>();
 
 /**
+ * lnd keeps sweep settings in memory only: after a restart it registers the
+ * anchors again with its own budget (about 330 sat, no deadline). The
+ * interceptor stream resetting is how an lnd restart shows here, so the bumps
+ * are sent again on the next run. Not on every run: each request makes lnd
+ * restart the sweep's fee function.
+ */
+export function forgetFeeBumps() {
+  bumped.clear();
+}
+
+/**
  * Bumps the unconfirmed close of every channel that holds a part Dunder
  * settled but lnd hasn't finally settled. Returns the channel points bumped
  * in this call.

@@ -34,6 +34,12 @@ describe("bumpForceCloseFee", () => {
     expect(fields[2]).toBe(10);
     expect(fields[4]).toBe(true);
     expect(fields[5]).toBe(12_345);
+    // A deadline, so a stuck call can't stall the guard.
+    const options = makeUnaryRequest.mock.calls[0][4] as { deadline: number };
+    expect(options.deadline).toBeLessThanOrEqual(
+      Date.now() + actualLndApi.BUMP_FORCE_CLOSE_FEE_TIMEOUT_MS,
+    );
+    expect(options.deadline).toBeGreaterThan(Date.now());
     makeUnaryRequest.mockRestore();
   });
 });

@@ -93,6 +93,20 @@ Recommended, in the `[routerrpc]` section:
 routerrpc.requireinterceptor=true
 ```
 
+Recommended, in `[Application Options]`:
+
+```ini
+; Inbound peers without a channel share this many connection slots (lnd's
+; default is 100); once they are full, lnd refuses new ones. Wallets have no
+; channel with Dunder until their first payout, and /register and incoming
+; payments need the wallet connected, so a full set of slots (from idle
+; wallets or from someone opening connections on purpose) stops new users.
+; An idle peer costs little memory.
+num-restricted-slots=1000
+```
+
+lnd logs "No restricted slots available" when it refuses a peer for this.
+
 ### Restricted macaroon
 
 Dunder doesn't need lnd's `admin.macaroon`. Bake one limited to the RPCs it

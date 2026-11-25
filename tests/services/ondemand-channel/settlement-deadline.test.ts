@@ -10,6 +10,7 @@ import {
   OVERDUE_BLOCKS_AFTER_EXPIRY,
   bumpClosesWithStalledSettlements,
   forceCloseChannelsWithStalledSettlements,
+  forgetFeeBumps,
 } from "../../../src/services/ondemand-channel/settlement-deadline";
 import { lnrpc } from "../../../src/proto";
 import {
@@ -203,6 +204,11 @@ describe("fee bumps for closes that hold settled parts", () => {
     // Not asked again with the same budget; the deadline is already set.
     expect(await bumpClosesWithStalledSettlements(db, {} as any)).toEqual([]);
     expect(bumpForceCloseFee).toHaveBeenCalledTimes(1);
+
+    // lnd restarted (the interceptor stream reset) and forgot the settings.
+    forgetFeeBumps();
+    expect(await bumpClosesWithStalledSettlements(db, {} as any)).toEqual([channelPoint]);
+    expect(bumpForceCloseFee).toHaveBeenCalledTimes(2);
   });
 
   test("never budgets more than the configured maximum", async () => {
