@@ -7,5 +7,9 @@ export function channelPointField(channelPoint: any) {
 
   const tx = channelPoint.split(":")[0];
 
-  return <Link href={`http://mempool.space/tx/${tx}`}>{channelPoint}</Link>;
+  return (
+    <Link href={`https://mempool.space/tx/${tx}`} rel="noreferrer">
+      {channelPoint}
+    </Link>
+  );
 }

@@ -54,6 +54,18 @@ describe("public-public forward blocker", () => {
     expect(writes[0].action).toBe(routerrpc.ResolveHoldForwardAction.RESUME);
   });
 
+  test("knows a confirmed zero-conf channel by its confirmed ID", async () => {
+    const response = await runBlocker([
+      { chanId: Long.fromValue(1), private: false },
+      {
+        chanId: Long.fromString("17592186044416000", true), // alias
+        zeroConfConfirmedScid: Long.fromValue(2, true),
+        private: false,
+      },
+    ]);
+    expect(response.action).toBe(routerrpc.ResolveHoldForwardAction.FAIL);
+  });
+
   test("flag enabled fails public-public HTLCs with temporary channel failure", async () => {
     const response = await runBlocker([
       { chanId: Long.fromValue(1), private: false },

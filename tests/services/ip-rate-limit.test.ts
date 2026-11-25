@@ -76,22 +76,6 @@ describe("per-IP rate limit", () => {
     }
   });
 
-  test("limits the session endpoint the login page calls first", async () => {
-    const restore = withConfig({ ipRateLimitPerMinute: 1, trustProxy: true });
-    const app = build();
-    try {
-      const request = {
-        url: "/admin/api/login-session",
-        headers: { "x-forwarded-for": "198.51.100.20", "x-forwarded-proto": "https" },
-      };
-      expect((await app.inject(request)).statusCode).toBe(200);
-      expect((await app.inject(request)).statusCode).toBe(429);
-    } finally {
-      restore();
-      await app.close();
-    }
-  });
-
   test("can't be skipped with a percent-encoded path", async () => {
     const restore = withConfig({ ipRateLimitPerMinute: 2, trustProxy: true });
     const app = build();

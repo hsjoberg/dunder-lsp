@@ -8,13 +8,13 @@ import { stringToUint8Array } from "../../src/utils/common";
 
 export const __MOCK_BLOCK_HEIGHT = 800_000;
 
-export async function getInfo(lightning: Client) {
-  const getInfoResponse = lnrpc.GetInfoResponse.create({
+export const __getInfo = jest.fn(async (lightning: Client) =>
+  lnrpc.GetInfoResponse.create({
     identityPubkey: "abc",
     blockHeight: __MOCK_BLOCK_HEIGHT,
-  });
-  return getInfoResponse;
-}
+  }),
+);
+export const getInfo = (lightning: Client) => __getInfo(lightning);
 
 export async function estimateFee(lightning: Client, amount: Long, targetConf: number) {
   const estimateFeeResponse = lnrpc.EstimateFeeResponse.create({
@@ -79,6 +79,11 @@ export async function pendingChannels(lightning: Client) {
 
 export const forceCloseChannel = jest.fn(async (lightning: Client, channelPoint: string) =>
   lnrpc.CloseStatusUpdate.create({}),
+);
+
+export const bumpForceCloseFee = jest.fn(
+  async (lightning: Client, channelPoint: string, deadlineDelta: number, budgetSat: number) =>
+    undefined,
 );
 
 export const openChannelSync = jest.fn(() => {

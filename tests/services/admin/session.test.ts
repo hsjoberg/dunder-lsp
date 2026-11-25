@@ -1,7 +1,6 @@
 import build from "../../../src/app";
-import getDb from "../../../src/db/db";
-import { createAdmin } from "../../../src/db/admin";
 import { BoundedSessionStore } from "../../../src/services/admin/session-store";
+import { approveLogin, completeLogin, loginAsAdmin } from "./login-helper";
 
 // HTTPS arrives through a reverse proxy, which Dunder must trust
 // (`trustProxy`) to believe its X-Forwarded-Proto header.
@@ -97,32 +96,37 @@ describe("BoundedSessionStore", () => {
 describe("admin session cookie", () => {
   test("is Secure, HttpOnly, SameSite=Strict and scoped to /admin", async () => {
     const app = buildBehindProxy();
-    await app.ready();
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    try {
+      const { token } = await approveLogin(app);
+      const response = await completeLogin(app, token);
 
-    const response = await app.inject({
-      method: "GET",
-      url: "/admin/api/login-session",
-      headers: { "x-forwarded-proto": "https" },
-    });
-
-    expect(response.statusCode).toBe(200);
-    const setCookie = String(response.headers["set-cookie"]);
-    expect(setCookie).toMatch(/; Secure/);
-    expect(setCookie).toMatch(/; HttpOnly/);
-    expect(setCookie).toMatch(/; SameSite=Strict/);
-    expect(setCookie).toMatch(/; Path=\/admin/);
-    expect(setCookie).toMatch(/; Expires=/);
-    await app.close();
+      expect(response.statusCode).toBe(200);
+      const setCookie = String(response.headers["set-cookie"]);
+      expect(setCookie).toMatch(/; Secure/);
+      expect(setCookie).toMatch(/; HttpOnly/);
+      expect(setCookie).toMatch(/; SameSite=Strict/);
+      expect(setCookie).toMatch(/; Path=\/admin/);
+      expect(setCookie).toMatch(/; Expires=/);
+    } finally {
+      await app.close();
+    }
   });
 
   test("is not set over plain HTTP when Dunder is configured for HTTPS", async () => {
     const app = buildBehindProxy();
-    await app.ready();
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    try {
+      const { token } = await approveLogin(app);
+      const response = await completeLogin(app, token, {});
 
-    const response = await app.inject({ method: "GET", url: "/admin/api/login-session" });
-
-    expect(response.headers["set-cookie"]).toBeUndefined();
-    await app.close();
+      // Not even the logged-in session's cookie, which the session plugin
+      // would otherwise send in the clear.
+      expect(response.statusCode).toBe(403);
+      expect(response.headers["set-cookie"]).toBeUndefined();
+    } finally {
+      await app.close();
+    }
   });
 
   test("is not created for requests that do not use the session", async () => {
@@ -141,44 +145,35 @@ describe("admin session cookie", () => {
   });
 
   test("no longer works after logout", async () => {
-    const db = await getDb(true);
-    await createAdmin(db, "abcdef12345", "Session test");
-    // Log in by marking the stored session as an authenticated admin.
-    let session: any;
-    const originalSet = BoundedSessionStore.prototype.set;
-    const spy = jest.spyOn(BoundedSessionStore.prototype, "set").mockImplementation(function (
-      this: BoundedSessionStore,
-      sessionId,
-      stored,
-      callback,
-    ) {
-      session = stored;
-      return originalSet.call(this, sessionId, stored, callback);
-    });
     const app = buildBehindProxy();
+    await app.listen({ host: "127.0.0.1", port: 0 });
     try {
-      await app.ready();
-      const initial = await app.inject({
-        url: "/admin/api/login-session",
-        headers: { "x-forwarded-proto": "https" },
-      });
-      spy.mockRestore();
-      session.set("authenticated", true);
-      session.set("pubkey", "abcdef12345");
-      const headers = {
-        cookie: String(initial.headers["set-cookie"]).split(";")[0],
-        "x-forwarded-proto": "https",
-      };
+      const { cookie } = await loginAsAdmin(app);
+      const headers = { cookie, "x-forwarded-proto": "https" };
       expect((await app.inject({ url: "/admin/api/admins", headers })).statusCode).toBe(200);
 
-      const logout = await app.inject({ url: "/admin/api/logout", headers });
+      // A GET (a link or image on another page) no longer logs out.
+      expect((await app.inject({ url: "/admin/api/logout", headers })).statusCode).toBe(404);
+      // Nor does a POST from a page on another subdomain.
+      const crossOrigin = await app.inject({
+        method: "POST",
+        url: "/admin/api/logout",
+        headers: { ...headers, origin: "https://evil.example.com" },
+      });
+      expect(crossOrigin.statusCode).toBe(403);
+      expect((await app.inject({ url: "/admin/api/admins", headers })).statusCode).toBe(200);
+
+      const logout = await app.inject({
+        method: "POST",
+        url: "/admin/api/logout",
+        // app.inject's Host is localhost:80.
+        headers: { ...headers, origin: "https://localhost:80" },
+      });
       expect(logout.statusCode).toBe(200);
 
       expect((await app.inject({ url: "/admin/api/admins", headers })).statusCode).toBe(403);
     } finally {
-      spy.mockRestore();
       await app.close();
-      await db.close();
     }
   });
 });

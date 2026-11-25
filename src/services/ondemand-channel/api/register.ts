@@ -45,6 +45,7 @@ import config from "config";
 import { openChannelForSettledHtlcs } from "../channel-open";
 import { parseSignedEnvelope, verifySignedEnvelope } from "./signed-request";
 import { subscribeWithReconnect } from "../../../utils/reconnecting-stream";
+import { FORCE_CLOSE_BLOCKS_BEFORE_EXPIRY } from "../settlement-deadline";
 
 export interface IRegisterRequest {
   pubkey: string;
@@ -233,7 +234,9 @@ export default function Register(
     const channelId = await (async function generateShortId(): Promise<Long> {
       const shortId = Long.fromValue(await generateShortChannelId());
 
-      if (await getChannelRequest(db, shortId.toString())) {
+      // lnd reads a next channel of 0 as "the payment ends here", so an HTLC
+      // for it would never reach the interceptor.
+      if (shortId.isZero() || (await getChannelRequest(db, shortId.toString()))) {
         console.log("Short id exists. Trying again");
         return await generateShortId();
       }
@@ -444,6 +447,14 @@ export const MIN_BLOCKS_BEFORE_AUTO_FAIL = 6;
  * than 2016 blocks by default.
  */
 export const MAX_BLOCKS_UNTIL_EXPIRY = 2016;
+/**
+ * The deadline guard force-closes the incoming channel when a settled part is
+ * still pending this close to its expiry. Holding parts only well before that
+ * point leaves an honest peer plenty of blocks to lock the settlement in, even
+ * when blocks come during the hold. Honest payments arrive with at least the
+ * route hint's 40 blocks plus the invoice's final delta.
+ */
+export const MIN_BLOCKS_UNTIL_EXPIRY = FORCE_CLOSE_BLOCKS_BEFORE_EXPIRY + 18;
 const LND_CLTV_REJECT_DELTA = 13;
 const BLOCK_HEIGHT_CACHE_MS = 15_000;
 
@@ -474,12 +485,14 @@ async function checkHtlcExpiry(
   try {
     currentHeight = await getCurrentBlockHeight(lightning);
   } catch (error) {
-    // Without a height the check can't run. lnd itself still refuses HTLCs
-    // that are already past the limit when they arrive.
+    // Without a height the margin can't be checked; the payer can retry.
     console.error("Could not get the block height for the HTLC expiry check", error);
-    return null;
+    return "Could not check the HTLC's expiry";
   }
-  if (autoFailHeight - currentHeight <= MIN_BLOCKS_BEFORE_AUTO_FAIL) {
+  if (
+    autoFailHeight - currentHeight <= MIN_BLOCKS_BEFORE_AUTO_FAIL ||
+    request.incomingExpiry - currentHeight < MIN_BLOCKS_UNTIL_EXPIRY
+  ) {
     return "HTLC expires too soon to be held";
   }
   if (request.incomingExpiry - currentHeight > MAX_BLOCKS_UNTIL_EXPIRY) {
@@ -766,6 +779,7 @@ async function settleHeldPayment(
         amountMsat: part.amountMsat.toString(),
         incomingAmountMsat: part.incomingAmountMsat.toString(),
         incomingExpiry: part.incomingExpiry,
+        incomingChannelPoint: part.incomingChannelPoint ?? null,
         settled: 0,
         claimed: 0,
       })),

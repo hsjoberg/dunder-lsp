@@ -218,7 +218,10 @@ export async function verifySignedEnvelope(
     if (consumedMessages.has(digest)) {
       return { ok: false, reason: "This signed message has already been used." };
     }
-    consumedMessages.set(digest, nowMs + SIGNED_MESSAGE_MAX_AGE_SECONDS * 2 * 1000);
+    // Kept until the message can no longer pass the timestamp check: its
+    // timestamp may be up to 30s ahead, it stays valid 30s past that, and the
+    // check compares whole seconds (so up to 1s more on each side).
+    consumedMessages.set(digest, nowMs + (SIGNED_MESSAGE_MAX_AGE_SECONDS * 2 + 2) * 1000);
   }
 
   if (!allowRequestForPubkey(pubkey, nowMs)) {

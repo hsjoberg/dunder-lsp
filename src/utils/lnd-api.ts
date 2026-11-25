@@ -3,6 +3,7 @@ import { hexToUint8Array, stringToUint8Array } from "./common";
 import { lnrpc, routerrpc } from "../proto";
 
 import Long from "long";
+import { Writer } from "protobufjs/minimal";
 import { grpcMakeUnaryRequest } from "./grpc";
 
 const feeEstimateAddressesByClient = new WeakMap<Client, [string, string]>();
@@ -131,13 +132,21 @@ export async function openChannelSync(
     memo,
   }).finish();
 
+  // A peer that stalls the funding handshake would otherwise keep this call
+  // (and the channel-open recovery loop waiting on it) hanging until lnd gives
+  // up on the reservation. A timeout counts as an ambiguous failure: the
+  // attempt is kept and matched to lnd's channels by its memo, so a channel
+  // that lnd opens later is still recorded and never opened twice.
   return await grpcMakeUnaryRequest<lnrpc.ChannelPoint>(
     lightning,
     "/lnrpc.Lightning/OpenChannelSync",
     openChannelSyncRequest,
     lnrpc.ChannelPoint.decode,
+    { deadline: Date.now() + OPEN_CHANNEL_TIMEOUT_MS },
   );
 }
+
+export const OPEN_CHANNEL_TIMEOUT_MS = 2 * 60 * 1000;
 
 export function htlcInterceptor(router: Client) {
   return router.makeBidiStreamRequest(
@@ -199,6 +208,38 @@ export function forceCloseChannel(lightning: Client, channelPoint: string, timeo
       reject(new Error("lnd ended the CloseChannel stream without an update"));
     });
   });
+}
+
+/**
+ * walletrpc.WalletKit/BumpForceCloseFee: lnd spends the anchor of the channel's
+ * unconfirmed force-close transaction to get it confirmed within
+ * `deadlineDelta` blocks, paying at most `budgetSat` in fees (all of it only if
+ * the deadline is reached). Anchor and taproot channels only.
+ *
+ * walletrpc isn't in Dunder's generated protos, so the request is encoded here
+ * (lnd v0.21 walletkit.proto, BumpForceCloseFeeRequest): chan_point = 1,
+ * deadline_delta = 2, immediate = 4, budget = 5.
+ */
+export async function bumpForceCloseFee(
+  lightning: Client,
+  channelPoint: string,
+  deadlineDelta: number,
+  budgetSat: number,
+) {
+  const [fundingTxidStr, outputIndex] = channelPoint.split(":");
+  const writer = Writer.create();
+  lnrpc.ChannelPoint.encode(
+    { fundingTxidStr, outputIndex: Number(outputIndex) },
+    writer.uint32((1 << 3) | 2).fork(),
+  ).ldelim();
+  writer.uint32((2 << 3) | 0).uint32(deadlineDelta);
+  writer.uint32((4 << 3) | 0).bool(true);
+  writer.uint32((5 << 3) | 0).uint64(budgetSat);
+  await grpcMakeUnaryRequest(
+    lightning,
+    "/walletrpc.WalletKit/BumpForceCloseFee",
+    writer.finish(),
+  );
 }
 
 export function subscribeChannelEvents(lightning: Client) {

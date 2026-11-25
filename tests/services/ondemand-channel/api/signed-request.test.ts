@@ -63,6 +63,24 @@ describe("signed requests", () => {
     __resetSignedRequestState();
   });
 
+  test("a message is refused again for as long as its timestamp is accepted", async () => {
+    // Signed 30s ahead, first used just after a whole second.
+    const body = signedBody({ timestamp: 1030 });
+    const use = async (nowMs: number) => {
+      const envelope = parseSignedEnvelope(body, REGISTER, "REGISTER", nowMs);
+      if (!envelope.ok) {
+        return envelope.reason;
+      }
+      const verified = await verifySignedEnvelope({} as any, envelope.value, nowMs);
+      return verified.ok ? "OK" : verified.reason;
+    };
+
+    expect(await use(1_000_001)).toBe("OK");
+    // Still within the timestamp check (1060 - 1030 = 30).
+    expect(await use(1_060_500)).toMatch(/already been used/);
+    expect(await use(1_061_000)).toMatch(/too old/);
+  });
+
   test("registers with a signed message and takes the fields from the signed data", async () => {
     const app = build();
     const body = signedBody({}, { amountSat: 12_345, preimage: "ab".repeat(32) });

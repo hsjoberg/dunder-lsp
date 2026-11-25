@@ -35,6 +35,12 @@ export function createPublicPublicForwardBlocker(lightning: Client): HtlcHandler
       if (channel.chanId) {
         publicByChannelId.set(channel.chanId.toString(), isPublic);
       }
+      // A confirmed zero-conf channel's chanId stays its alias; the real ID
+      // is listed separately.
+      const confirmedScid = channel.zeroConfConfirmedScid?.toString();
+      if (confirmedScid && confirmedScid !== "0") {
+        publicByChannelId.set(confirmedScid, isPublic);
+      }
       // HTLCs can name a channel by one of its aliases (zero-conf, scid-alias).
       for (const alias of channel.aliasScids ?? []) {
         publicByChannelId.set(alias.toString(), isPublic);

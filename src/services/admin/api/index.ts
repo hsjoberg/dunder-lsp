@@ -8,6 +8,7 @@ import AdminHtlcSettlements from "./htlc-settlements";
 import AdminAdmin from "./admin";
 import AdminPendingChannels from "./pending-channels";
 import AdminChannelOpenAttempts from "./channel-open-attempts";
+import { isSameOrigin } from "./same-origin";
 
 export interface IErrorResponse {
   status: "ERROR";
@@ -24,7 +25,13 @@ const AdminApi = async function (app, { lightning, router }) {
   app.register(AdminPendingChannels, { lightning, router });
   app.register(AdminChannelOpenAttempts, { lightning });
 
-  app.get("/logout", async (request) => {
+  // POST with an Origin check, so a page elsewhere (another subdomain gets
+  // the SameSite cookie too) can't log the admin out.
+  app.post("/logout", async (request, reply) => {
+    if (!isSameOrigin(request)) {
+      reply.code(403);
+      return "Origin not allowed";
+    }
     // Destroy through the session itself: destroying only the stored copy
     // leaves request.session in place, and @fastify/session saves it back
     // when the response is sent, so the cookie would stay logged in.

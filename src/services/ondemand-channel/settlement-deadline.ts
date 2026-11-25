@@ -1,9 +1,16 @@
 import { Client } from "@grpc/grpc-js";
 import { Database } from "sqlite";
+import config from "config";
 
 import { getUnsettledHtlcSettlements } from "../../db/ondemand-channel";
 import { lnrpc } from "../../proto";
-import { forceCloseChannel, getInfo, listChannels } from "../../utils/lnd-api";
+import {
+  bumpForceCloseFee,
+  forceCloseChannel,
+  getInfo,
+  listChannels,
+  pendingChannels,
+} from "../../utils/lnd-api";
 
 /*
  * Deadline guard
@@ -22,10 +29,10 @@ import { forceCloseChannel, getInfo, listChannels } from "../../utils/lnd-api";
  * the preimage. The payout follows lnd's final outcome, after the claim's
  * timelock.
  *
- * Dunder only accepts an HTLC with more than 19 blocks left before its expiry,
- * so an honest payer always has time to lock the settlement in (it takes
- * seconds) before the guard acts, and lnd still has this many blocks to
- * confirm the close and claim the HTLC.
+ * Dunder only accepts an HTLC with at least 18 more blocks left than this
+ * (MIN_BLOCKS_UNTIL_EXPIRY in register.ts), so an honest payer always has time
+ * to lock the settlement in (it takes seconds) before the guard acts, and lnd
+ * still has this many blocks to confirm the close and claim the HTLC.
  *
  * A part below the channel's dust limit has no output on-chain, so closing
  * for it gains nothing; it is skipped (and would otherwise let a peer make
@@ -138,6 +145,115 @@ export async function forceCloseChannelsWithStalledSettlements(db: Database, lig
   return closed;
 }
 
+/*
+ * Fee bumping
+ * -----------
+ * A force close confirms only at the fee rate its commitment already has; on
+ * a channel the peer opened, the peer chose that rate. lnd doesn't treat the
+ * close as urgent either: it doesn't know preimages given through the
+ * interceptor, so it sees no HTLCs at stake. And it offers the HTLC for the
+ * on-chain claim only 3 to 6 confirmations after the close. A close that
+ * confirms too late lets the payer take the HTLC back after its expiry while
+ * holding the preimage. That holds both for the guard's own close and for a
+ * close the payer broadcasts itself.
+ *
+ * So every closing channel that still holds a part Dunder settled gets its
+ * close bumped through its anchor, to confirm early enough for the claim.
+ * lnd's fee function starts at the market rate and rises towards the budget
+ * only as the deadline nears; the budget is a hard ceiling. It is at most
+ * half the parts' value, so making Dunder spend it puts at least twice that
+ * at stake (lost to the payer if the bump works), and at most
+ * `forceCloseFeeBumpMaxSat`.
+ */
+export const FEE_BUMP_BUDGET_RATIO = 0.5;
+export const DEFAULT_FEE_BUMP_MAX_SAT = 50_000;
+/** lnd waits up to 6 confirmations before the claim, which needs one more block. */
+export const BLOCKS_NEEDED_AFTER_CLOSE = 8;
+
+const ANCHOR_COMMITMENT_TYPES = new Set<lnrpc.CommitmentType>([
+  lnrpc.CommitmentType.ANCHORS,
+  lnrpc.CommitmentType.SCRIPT_ENFORCED_LEASE,
+  lnrpc.CommitmentType.SIMPLE_TAPROOT,
+  lnrpc.CommitmentType.SIMPLE_TAPROOT_OVERLAY,
+]);
+
+function getFeeBumpMaxSat() {
+  return config.has("forceCloseFeeBumpMaxSat")
+    ? config.get<number>("forceCloseFeeBumpMaxSat")
+    : DEFAULT_FEE_BUMP_MAX_SAT;
+}
+
+/** Budget last registered per channel point, so lnd is asked again only on a change. */
+const bumped = new Map<string, number>();
+
+/**
+ * Bumps the unconfirmed close of every channel that holds a part Dunder
+ * settled but lnd hasn't finally settled. Returns the channel points bumped
+ * in this call.
+ */
+export async function bumpClosesWithStalledSettlements(db: Database, lightning: Client) {
+  const unsettled = (await getUnsettledHtlcSettlements(db)).filter(
+    (settlement) => settlement.incomingExpiry != null && settlement.incomingChannelPoint,
+  );
+  if (unsettled.length === 0) {
+    return [];
+  }
+  const { waitingCloseChannels } = await pendingChannels(lightning);
+  if (waitingCloseChannels.length === 0) {
+    return [];
+  }
+  const height = (await getInfo(lightning)).blockHeight;
+  // Forget channels whose close has confirmed.
+  const closing = new Set(waitingCloseChannels.map(({ channel }) => channel?.channelPoint));
+  for (const channelPoint of bumped.keys()) {
+    if (!closing.has(channelPoint)) {
+      bumped.delete(channelPoint);
+    }
+  }
+
+  const done: string[] = [];
+  for (const { channel } of waitingCloseChannels) {
+    const channelPoint = channel?.channelPoint;
+    const commitmentType = channel?.commitmentType ?? lnrpc.CommitmentType.UNKNOWN_COMMITMENT_TYPE;
+    if (!channelPoint || !ANCHOR_COMMITMENT_TYPES.has(commitmentType)) {
+      continue;
+    }
+    const parts = unsettled.filter(
+      (settlement) =>
+        settlement.incomingChannelPoint === channelPoint && settlement.incomingExpiry! > height,
+    );
+    if (parts.length === 0) {
+      continue;
+    }
+    const valueSat = parts.reduce((sum, part) => sum + part.amountSat, 0);
+    const budgetSat = Math.min(Math.floor(valueSat * FEE_BUMP_BUDGET_RATIO), getFeeBumpMaxSat());
+    if (budgetSat <= 0 || bumped.get(channelPoint) === budgetSat) {
+      continue;
+    }
+    const firstExpiry = Math.min(...parts.map((part) => part.incomingExpiry!));
+    const deadlineDelta = Math.max(1, firstExpiry - height - BLOCKS_NEEDED_AFTER_CLOSE);
+    try {
+      await bumpForceCloseFee(lightning, channelPoint, deadlineDelta, budgetSat);
+      bumped.set(channelPoint, budgetSat);
+      done.push(channelPoint);
+      console.log("Bumped the fee of a close that holds settled parts", {
+        channelPoint,
+        deadlineDelta,
+        budgetSat,
+        parts: parts.length,
+      });
+    } catch (error) {
+      // Tried again on the next run, e.g. while lnd hasn't registered the
+      // anchor yet right after the close.
+      console.error("Could not bump the fee of a close that holds settled parts", {
+        channelPoint,
+        error,
+      });
+    }
+  }
+  return done;
+}
+
 export function startSettlementDeadlineGuard(db: Database, lightning: Client) {
   let running = false;
   const run = async () => {
@@ -149,6 +265,11 @@ export function startSettlementDeadlineGuard(db: Database, lightning: Client) {
       await forceCloseChannelsWithStalledSettlements(db, lightning);
     } catch (error) {
       console.error("Settlement deadline check failed", error);
+    }
+    try {
+      await bumpClosesWithStalledSettlements(db, lightning);
+    } catch (error) {
+      console.error("Could not check closing channels for fee bumps", error);
     } finally {
       running = false;
     }
