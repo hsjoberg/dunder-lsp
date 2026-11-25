@@ -11,10 +11,6 @@ const LnUrlAuthLoginPage: React.FunctionComponent = ({ theme }: any) => {
   useEffect(() => {
     let ws: WebSocket;
     (async () => {
-      // Gets the session cookie first: the WebSocket handshake can't set it, and
-      // the WebSocket and /login-complete must share one session.
-      await fetch("/admin/api/login-session", { credentials: "include" });
-
       const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
       ws = new WebSocket(`${wsProtocol}://${window.location.host}/admin/api/login-ws`);
       ws.onmessage = async (event) => {
@@ -24,11 +20,14 @@ const LnUrlAuthLoginPage: React.FunctionComponent = ({ theme }: any) => {
           setBech32(response.lnurlAuth);
         } else if (response.status) {
           if (response.status === "OK") {
-            // The wallet approved the login. Complete it from the browser so
-            // the server can issue a fresh session cookie.
+            // The wallet approved the login. Complete it from the browser with
+            // the token only this WebSocket received, so the server can issue
+            // a fresh session cookie.
             const completion = await fetch("/admin/api/login-complete", {
               method: "POST",
               credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ token: response.token }),
             });
             if (completion.ok) {
               login({ username: "username", password: "password" });

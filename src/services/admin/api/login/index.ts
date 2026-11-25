@@ -1,7 +1,6 @@
 import { randomBytes } from "crypto";
 import { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { Client } from "@grpc/grpc-js";
-import { SessionStore } from "@fastify/session";
 import secp256k1 from "secp256k1";
 import type { WebSocket } from "ws";
 import config from "config";
@@ -24,10 +23,7 @@ export interface IErrorResponse {
 }
 
 interface IUser {
-  sessionId: string;
   socket: WebSocket;
-  sessionStore: SessionStore;
-  session: FastifyRequest["session"];
   k1: string;
   client: string;
 }
@@ -42,15 +38,18 @@ const LOGIN_SOCKET_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
  * Logins approved by a wallet, waiting for the browser to complete them.
- * Keyed by the browser's pre-login session ID.
+ * Keyed by a random token sent only over the login WebSocket that asked for
+ * the approval. A cookie can't link the two: a page on another subdomain (or
+ * a plain-HTTP response) can plant a cookie that only the WebSocket sends,
+ * and the approval would then go to whoever holds that cookie.
  */
 const PENDING_LOGIN_TTL_MS = 2 * 60 * 1000;
 const pendingLogins: Map<string, { pubkey: string; expiresAt: number }> = new Map();
 
 function sweepPendingLogins(now: number) {
-  for (const [sessionId, pending] of pendingLogins) {
+  for (const [token, pending] of pendingLogins) {
     if (pending.expiresAt <= now) {
-      pendingLogins.delete(sessionId);
+      pendingLogins.delete(token);
     }
   }
 }
@@ -67,17 +66,6 @@ function isHex(value: unknown, minLength: number, maxLength: number): value is s
 
 const AdminLogin = async function (app, { lightning, router }) {
   const db = await getDb();
-
-  // The login page calls this before opening the login WebSocket. A WebSocket
-  // handshake response can't set the session cookie (@fastify/session sets
-  // it when a normal response is sent), so without this the WebSocket and the
-  // later /login-complete would each get a different session. Writing a value
-  // makes the session be stored (saveUninitialized is off). It falls under the
-  // per-IP rate limit for "/admin/api/login".
-  app.get("/login-session", async (request) => {
-    request.session.set<any>("lnurlAuthSession", true);
-    return "1";
-  });
 
   app.get(
     "/login-ws",
@@ -101,19 +89,11 @@ const AdminLogin = async function (app, { lightning, router }) {
 
       const serverDomain = config.get<string>("serverDomain");
 
-      const sessionId = request.session.sessionId;
       // Synchronous, so the message handler below is attached before any
       // message can arrive.
       const k1 = randomBytes(32).toString("hex");
 
-      users.set(socket, {
-        sessionId: sessionId,
-        socket,
-        sessionStore: request.sessionStore,
-        session: request.session,
-        k1,
-        client,
-      });
+      users.set(socket, { socket, k1, client });
 
       socket.on("message", (message: any) => {
         const text = message.toString();
@@ -198,34 +178,42 @@ const AdminLogin = async function (app, { lightning, router }) {
       return error;
     }
 
-    // The browser completes the login itself (POST /login-complete), so it
-    // gets a fresh session ID. Each k1 can be used for one login only.
+    // The browser completes the login itself (POST /login-complete with the
+    // token), so it gets a fresh session. Each k1 can be used for one login
+    // only.
     const now = Date.now();
     sweepPendingLogins(now);
     for (const [_, user] of u) {
-      pendingLogins.set(user.sessionId, { pubkey: key, expiresAt: now + PENDING_LOGIN_TTL_MS });
+      const token = randomBytes(32).toString("hex");
+      pendingLogins.set(token, { pubkey: key, expiresAt: now + PENDING_LOGIN_TTL_MS });
       user.k1 = bytesToHexString(await generateBytes(32));
-      user.socket.send(
-        JSON.stringify({
-          status: "OK",
-        }),
-      );
+      user.socket.send(JSON.stringify({ status: "OK", token }));
     }
 
     return reply.send({ status: "OK" });
   });
 
   app.post("/login-complete", async (request, reply) => {
+    // regenerate() below saves the session at once, and @fastify/session then
+    // sends its cookie even over plain HTTP (its own check only covers
+    // sessions saved at the end of the request). A logged-in cookie must
+    // never travel in the clear, so a Secure-cookie deployment only completes
+    // logins over HTTPS (behind a proxy: X-Forwarded-Proto and trustProxy).
+    if (request.session.cookie.secure === true && request.protocol !== "https") {
+      reply.code(403);
+      const error: IErrorResponse = { status: "ERROR", reason: "Log in over HTTPS." };
+      return error;
+    }
     const now = Date.now();
     sweepPendingLogins(now);
-    const previousSessionId = request.session.sessionId;
-    const pending = pendingLogins.get(previousSessionId);
+    const token = (request.body as { token?: unknown } | undefined)?.token;
+    const pending = isHex(token, 64, 64) ? pendingLogins.get(token) : undefined;
     if (!pending) {
       reply.code(403);
       const error: IErrorResponse = { status: "ERROR", reason: "No approved login found." };
       return error;
     }
-    pendingLogins.delete(previousSessionId);
+    pendingLogins.delete(token as string);
 
     if (!(await checkAdminPubkey(db, pending.pubkey))) {
       reply.code(403);
@@ -236,9 +224,8 @@ const AdminLogin = async function (app, { lightning, router }) {
       return error;
     }
 
-    // New session ID at login, so a session ID seen before login is useless:
-    // @fastify/session keeps the stored session under the same store key but
-    // no longer accepts a cookie with the old ID.
+    // New session ID at login, so a session cookie the browser already had
+    // (possibly planted) is never the one that gets logged in.
     await request.session.regenerate();
     request.session.set<any>("authenticated", true);
     request.session.set<any>("pubkey", pending.pubkey);
