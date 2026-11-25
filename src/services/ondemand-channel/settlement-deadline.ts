@@ -22,10 +22,10 @@ import { forceCloseChannel, getInfo, listChannels } from "../../utils/lnd-api";
  * the preimage. The payout follows lnd's final outcome, after the claim's
  * timelock.
  *
- * Dunder only accepts an HTLC with more than 19 blocks left before its expiry,
- * so an honest payer always has time to lock the settlement in (it takes
- * seconds) before the guard acts, and lnd still has this many blocks to
- * confirm the close and claim the HTLC.
+ * Dunder only accepts an HTLC with at least 18 more blocks left than this
+ * (MIN_BLOCKS_UNTIL_EXPIRY in register.ts), so an honest payer always has time
+ * to lock the settlement in (it takes seconds) before the guard acts, and lnd
+ * still has this many blocks to confirm the close and claim the HTLC.
  *
  * A part below the channel's dust limit has no output on-chain, so closing
  * for it gains nothing; it is skipped (and would otherwise let a peer make

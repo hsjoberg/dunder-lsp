@@ -9,7 +9,7 @@ export default {
   },
   // called when the user clicks on the logout button
   logout: async () => {
-    await fetch("/admin/api/logout");
+    await fetch("/admin/api/logout", { method: "POST" });
     localStorage.removeItem("authenticated");
     return;
   },

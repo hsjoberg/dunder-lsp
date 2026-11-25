@@ -1,5 +1,5 @@
 import fs from "fs";
-import { Client, loadPackageDefinition, credentials, Metadata } from "@grpc/grpc-js";
+import { CallOptions, Client, loadPackageDefinition, credentials, Metadata } from "@grpc/grpc-js";
 import os from "os";
 import net from "net";
 import * as protoLoader from "@grpc/proto-loader";
@@ -115,13 +115,21 @@ export const grpcMakeUnaryRequest = <Response = unknown>(
   method: string,
   argument: Uint8Array,
   decoder = (data: Uint8Array) => data as any,
+  options: CallOptions = {},
 ): Promise<Response> => {
   return new Promise((resolve, reject) => {
-    client.makeUnaryRequest(method, grpcReqSerialize, grpcReqDeserialize, argument, (err, res) => {
-      if (err) {
-        return reject(err);
-      }
-      resolve(decoder(res));
-    });
+    client.makeUnaryRequest(
+      method,
+      grpcReqSerialize,
+      grpcReqDeserialize,
+      argument,
+      options,
+      (err, res) => {
+        if (err) {
+          return reject(err);
+        }
+        resolve(decoder(res));
+      },
+    );
   });
 };

@@ -131,13 +131,21 @@ export async function openChannelSync(
     memo,
   }).finish();
 
+  // A peer that stalls the funding handshake would otherwise keep this call
+  // (and the channel-open recovery loop waiting on it) hanging until lnd gives
+  // up on the reservation. A timeout counts as an ambiguous failure: the
+  // attempt is kept and matched to lnd's channels by its memo, so a channel
+  // that lnd opens later is still recorded and never opened twice.
   return await grpcMakeUnaryRequest<lnrpc.ChannelPoint>(
     lightning,
     "/lnrpc.Lightning/OpenChannelSync",
     openChannelSyncRequest,
     lnrpc.ChannelPoint.decode,
+    { deadline: Date.now() + OPEN_CHANNEL_TIMEOUT_MS },
   );
 }
+
+export const OPEN_CHANNEL_TIMEOUT_MS = 2 * 60 * 1000;
 
 export function htlcInterceptor(router: Client) {
   return router.makeBidiStreamRequest(

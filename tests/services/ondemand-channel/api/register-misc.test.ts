@@ -1,4 +1,5 @@
 import build from "../../../../src/app";
+import * as common from "../../../../src/utils/common";
 import { bytesToHexString } from "../../../../src/utils/common";
 
 // Mocked functions
@@ -44,6 +45,28 @@ describe("/ondemand-channel/register", () => {
     });
     expect(response.statusCode).toBe(400);
     app.close();
+  });
+
+  test("never hands out channel ID 0", async () => {
+    const app = build();
+    const generate = jest
+      .spyOn(common, "generateShortChannelId")
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(12345);
+    try {
+      const response = await sendRegisterRequest(app, {
+        amountSat: 10000,
+        preimage: bytesToHexString(createPreimage(5, 0, 9)),
+        pubkey: "abcdef12345",
+        signature: "validsig",
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().fakeChannelId).toBe("12345");
+      expect(generate).toHaveBeenCalledTimes(2);
+    } finally {
+      generate.mockRestore();
+      app.close();
+    }
   });
 
   test.each([

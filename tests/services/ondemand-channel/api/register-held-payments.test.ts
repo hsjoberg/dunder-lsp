@@ -12,8 +12,10 @@ import {
   dropHeldPaymentsAfterStreamReset,
   handleHtlcFailed,
   handleHtlcSettled,
+  MIN_BLOCKS_UNTIL_EXPIRY,
   REQUEST_EXPIRY_GRACE_SECONDS,
 } from "../../../../src/services/ondemand-channel/api/register";
+import { FORCE_CLOSE_BLOCKS_BEFORE_EXPIRY } from "../../../../src/services/ondemand-channel/settlement-deadline";
 import { HtlcResponseWriter } from "../../../../src/services/htlc-interceptor";
 import { lnrpc, routerrpc } from "../../../../src/proto";
 import { bytesToHexString, sha256Buffer } from "../../../../src/utils/common";
@@ -22,6 +24,7 @@ import { createPreimage } from "./register-helpers";
 
 import {
   __MOCK_BLOCK_HEIGHT,
+  __getInfo,
   __listChannels,
   __listChannelsRecent,
   __setListChannelsResponse,
@@ -343,7 +346,7 @@ describe("held multi-part payments", () => {
     const part = writer();
     await handler(
       htlc(10_000, "101", "1", {
-        incomingExpiry: __MOCK_BLOCK_HEIGHT + 19,
+        incomingExpiry: __MOCK_BLOCK_HEIGHT + 100,
         autoFailHeight: __MOCK_BLOCK_HEIGHT + 6,
       }),
       part,
@@ -351,17 +354,45 @@ describe("held multi-part payments", () => {
     expect(part.actions).toEqual([FAIL]);
   });
 
-  test("an HTLC with enough blocks left is held", async () => {
+  test("an HTLC is held only well before the deadline guard would act", async () => {
     const { handler, htlc } = await setup();
-    const part = writer();
+    const tooSoon = writer();
     await handler(
       htlc(10_000, "102", "1", {
-        incomingExpiry: __MOCK_BLOCK_HEIGHT + 20,
-        autoFailHeight: __MOCK_BLOCK_HEIGHT + 7,
+        incomingExpiry: __MOCK_BLOCK_HEIGHT + MIN_BLOCKS_UNTIL_EXPIRY - 1,
+        autoFailHeight: __MOCK_BLOCK_HEIGHT + MIN_BLOCKS_UNTIL_EXPIRY - 14,
       }),
-      part,
+      tooSoon,
     );
-    expect(part.actions).toEqual([]);
+    expect(tooSoon.actions).toEqual([FAIL]);
+
+    const enough = writer();
+    await handler(
+      htlc(10_000, "102", "2", {
+        incomingExpiry: __MOCK_BLOCK_HEIGHT + MIN_BLOCKS_UNTIL_EXPIRY,
+        autoFailHeight: __MOCK_BLOCK_HEIGHT + MIN_BLOCKS_UNTIL_EXPIRY - 13,
+      }),
+      enough,
+    );
+    expect(enough.actions).toEqual([]);
+    expect(MIN_BLOCKS_UNTIL_EXPIRY - FORCE_CLOSE_BLOCKS_BEFORE_EXPIRY).toBeGreaterThanOrEqual(18);
+  });
+
+  test("an HTLC is failed when the block height can't be read", async () => {
+    const { handler, htlc } = await setup();
+    // Past the block height cache, and lnd doesn't answer.
+    const now = Date.now();
+    const clock = jest.spyOn(Date, "now").mockReturnValue(now + 60_000);
+    __getInfo.mockRejectedValueOnce(new Error("lnd unavailable"));
+    const errors = jest.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const part = writer();
+      await handler(htlc(10_000, "106", "9"), part);
+      expect(part.actions).toEqual([FAIL]);
+    } finally {
+      clock.mockRestore();
+      errors.mockRestore();
+    }
   });
 
   test("an HTLC expiring more than 2016 blocks ahead is failed", async () => {
@@ -387,12 +418,6 @@ describe("held multi-part payments", () => {
     expect(limit.actions).toEqual([]);
   });
 
-  test("without lnd's auto-fail height, it is derived from the incoming expiry", async () => {
-    const { handler, htlc } = await setup();
-    const part = writer();
-    await handler(htlc(10_000, "103", "1", { incomingExpiry: __MOCK_BLOCK_HEIGHT + 19 }), part);
-    expect(part.actions).toEqual([FAIL]);
-  });
 
   test("a second full payment that raced past the paid check is failed back", async () => {
     const { db, channelId, handler, htlc } = await setup({ amountSat: 10_000 });

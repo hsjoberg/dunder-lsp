@@ -8,6 +8,7 @@ const WebSocket = require("ws");
 import build from "../../../src/app";
 import getDb from "../../../src/db/db";
 import { createAdmin } from "../../../src/db/admin";
+import { BoundedSessionStore } from "../../../src/services/admin/session-store";
 import { bytesToHexString } from "../../../src/utils/common";
 import {
   MAX_LOGIN_SOCKETS,
@@ -123,6 +124,52 @@ describe("admin LNURL-auth login", () => {
       const code = await new Promise<number>((resolve) => socket.once("close", resolve));
       expect(code).toBe(1008);
     } finally {
+      await app.close();
+    }
+  });
+
+  test("the create-admin WebSocket refuses another origin even with the admin's cookie", async () => {
+    const db = await getDb();
+    await createAdmin(db, "abcdef12345", "Origin test");
+    // Log in by marking the stored session as an authenticated admin.
+    let session: any;
+    const originalSet = BoundedSessionStore.prototype.set;
+    const spy = jest
+      .spyOn(BoundedSessionStore.prototype, "set")
+      .mockImplementation(function (this: BoundedSessionStore, sessionId, stored, callback) {
+        session = stored;
+        return originalSet.call(this, sessionId, stored, callback);
+      });
+    const app = build({ trustProxy: true });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const port = (app.server.address() as AddressInfo).port;
+    try {
+      const initial = await app.inject({ url: "/admin/api/login-session", headers: HTTPS });
+      spy.mockRestore();
+      session.set("authenticated", true);
+      session.set("pubkey", "abcdef12345");
+      const cookie = cookieFrom(initial.headers["set-cookie"]);
+
+      const open = (origin: string) => {
+        const socket = new WebSocket(`ws://127.0.0.1:${port}/admin/api/create-admin-lnurl-auth-ws`, {
+          headers: { ...HTTPS, cookie, origin },
+        });
+        const messages: any[] = [];
+        socket.on("message", (data: Buffer) => messages.push(JSON.parse(data.toString())));
+        return { socket, messages };
+      };
+
+      const evil = open("https://other.example.com");
+      const code = await new Promise<number>((resolve) => evil.socket.once("close", resolve));
+      expect(code).toBe(1008);
+      expect(evil.messages).toEqual([]);
+
+      const own = open(`http://127.0.0.1:${port}`);
+      const message = await nextMessage(own.socket);
+      expect(typeof message.lnurlAuth).toBe("string");
+      own.socket.close();
+    } finally {
+      spy.mockRestore();
       await app.close();
     }
   });

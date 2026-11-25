@@ -171,7 +171,23 @@ describe("admin session cookie", () => {
       };
       expect((await app.inject({ url: "/admin/api/admins", headers })).statusCode).toBe(200);
 
-      const logout = await app.inject({ url: "/admin/api/logout", headers });
+      // A GET (a link or image on another page) no longer logs out.
+      expect((await app.inject({ url: "/admin/api/logout", headers })).statusCode).toBe(404);
+      // Nor does a POST from a page on another subdomain.
+      const crossOrigin = await app.inject({
+        method: "POST",
+        url: "/admin/api/logout",
+        headers: { ...headers, origin: "https://evil.example.com" },
+      });
+      expect(crossOrigin.statusCode).toBe(403);
+      expect((await app.inject({ url: "/admin/api/admins", headers })).statusCode).toBe(200);
+
+      const logout = await app.inject({
+        method: "POST",
+        url: "/admin/api/logout",
+        // app.inject's Host is localhost:80.
+        headers: { ...headers, origin: "https://localhost:80" },
+      });
       expect(logout.statusCode).toBe(200);
 
       expect((await app.inject({ url: "/admin/api/admins", headers })).statusCode).toBe(403);

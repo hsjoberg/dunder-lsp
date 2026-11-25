@@ -21,6 +21,7 @@ import {
 import { IErrorResponse } from "../../../services/ondemand-channel";
 import type { WebSocket } from "ws";
 import { requireAuthenticatedAdmin } from "./auth";
+import { isSameOrigin } from "./same-origin";
 
 interface ICreateAdminLnUrlAuthRequests {
   k1: string;
@@ -217,6 +218,12 @@ const AdminAdmin = async function (app, { lightning, router }) {
     "/create-admin-lnurl-auth-ws",
     { websocket: true },
     async (socket: WebSocket, request: FastifyRequest) => {
+      // Otherwise a page on another subdomain could open this socket with the
+      // admin's cookie, read the LNURL and sign it to become an admin.
+      if (!isSameOrigin(request)) {
+        socket.close(1008, "Origin not allowed");
+        return;
+      }
       const session = request.session as any;
       const sessionPubkey = session.get("pubkey");
       if (

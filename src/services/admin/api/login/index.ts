@@ -16,6 +16,7 @@ import {
 import getDb from "../../../../db/db";
 import { checkAdminPubkey } from "../../../../db/admin";
 import { clientKey } from "../../../ip-rate-limit";
+import { isSameOrigin } from "../same-origin";
 
 export interface IErrorResponse {
   status: "ERROR";
@@ -62,19 +63,6 @@ function isHex(value: unknown, minLength: number, maxLength: number): value is s
     value.length % 2 === 0 &&
     /^[0-9a-fA-F]+$/.test(value)
   );
-}
-
-/** A browser WebSocket always sends Origin; it must be this server. */
-function isSameOrigin(request: FastifyRequest) {
-  const origin = request.headers.origin;
-  if (!origin) {
-    return true;
-  }
-  try {
-    return new URL(origin).host === request.headers.host;
-  } catch {
-    return false;
-  }
 }
 
 const AdminLogin = async function (app, { lightning, router }) {
