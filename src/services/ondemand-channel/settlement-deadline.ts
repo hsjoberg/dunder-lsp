@@ -161,9 +161,11 @@ export async function forceCloseChannelsWithStalledSettlements(db: Database, lig
  * close bumped through its anchor, to confirm early enough for the claim.
  * lnd's fee function starts at the market rate and rises towards the budget
  * only as the deadline nears; the budget is a hard ceiling. It is at most
- * half the parts' value, so making Dunder spend it puts at least twice that
- * at stake (lost to the payer if the bump works), and at most
- * `forceCloseFeeBumpMaxSat`.
+ * half the parts' value and at most `forceCloseFeeBumpMaxSat`, which is what
+ * Dunder risks per stalled payment. A payer who stalls doesn't necessarily
+ * lose the parts: when the payer is also the receiver, they come back as the
+ * payout. Stalling still costs the payer its channel with Dunder, which the
+ * guard force-closes.
  */
 export const FEE_BUMP_BUDGET_RATIO = 0.5;
 export const DEFAULT_FEE_BUMP_MAX_SAT = 50_000;

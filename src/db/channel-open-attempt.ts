@@ -89,6 +89,7 @@ export function getChannelOpenAttempts(db: Database, limit = 100) {
 /**
  * The rows returned here are the durable automatic-opening queue. They are
  * requests whose complete payment is settled but has not yet been paid out.
+ * A payment is complete at or above its amount, as in the payout itself.
  * Keeping the queue derivable from settlement state means it survives a
  * process restart without another in-memory job table.
  */
@@ -112,7 +113,7 @@ export function getRecoverableAutomaticChannelRequests(db: Database) {
            )
          ELSE 0
        END
-     ) = channelRequest.expectedAmountSat * 1000
+     ) >= channelRequest.expectedAmountSat * 1000
        AND SUM(CASE WHEN htlcSettlement.settled = 0 THEN 1 ELSE 0 END) = 0
        AND SUM(CASE WHEN htlcSettlement.claimed = 1 THEN 1 ELSE 0 END) = 0
      ORDER BY channelRequest.start, channelRequest.channelId`,

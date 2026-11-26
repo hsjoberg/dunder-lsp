@@ -882,6 +882,34 @@ describe("/ondemand-channel/claim", () => {
     expect((openChannelSync as jest.Mock).mock.calls[0][3].toString()).toBe("5490");
   });
 
+  test("the recovery loop retries an automatic open for a payment that overshot", async () => {
+    const db = await getDb(true);
+    await createChannelRequest(db, {
+      channelId: "overshot-retry",
+      pubkey: PUBKEY,
+      preimage: "overshot-retry-preimage",
+      status: "REGISTERED",
+      start: 0,
+      expire: 600,
+      expectedAmountSat: 5000,
+      channelPoint: null,
+    });
+    await createHtlcSettlement(db, {
+      channelId: "overshot-retry",
+      incomingChannelId: "1",
+      htlcId: "1",
+      amountSat: 5500,
+      settled: 1,
+      claimed: 0,
+    });
+
+    // The first automatic open didn't happen (wallet offline, restart, ...).
+    await recoverChannelOpenState(db, {} as any);
+
+    expect(openChannelSync).toBeCalledTimes(1);
+    expect((openChannelSync as jest.Mock).mock.calls[0][3].toString()).toBe("5490");
+  });
+
   test("does not pay out a request while one of its parts awaits settlement", async () => {
     const db = await getDb(true);
     await seedUnclaimed(db, { channelId: "still-settling" });
