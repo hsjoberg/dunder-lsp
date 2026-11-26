@@ -16,7 +16,7 @@ import {
 } from "./api/register";
 import config from "config";
 import { startChannelOpenRecovery } from "./channel-open";
-import { startSettlementDeadlineGuard } from "./settlement-deadline";
+import { forgetFeeBumps, startSettlementDeadlineGuard } from "./settlement-deadline";
 
 export interface IErrorResponse {
   status: "ERROR";
@@ -32,11 +32,13 @@ const OnDemandChannel = async function (app, { lightning, router }) {
     createOnDemandChannelHtlcHandler(db, lightning),
   );
   const unsubscribeStreamReset = interceptor.onStreamReset(dropHeldPaymentsAfterStreamReset);
+  const unsubscribeBumpReset = interceptor.onStreamReset(forgetFeeBumps);
   const stopSettlementTracking = startHtlcSettlementTracking(db, lightning, router);
 
   app.addHook("onClose", async () => {
     unregisterHtlcHandler();
     unsubscribeStreamReset();
+    unsubscribeBumpReset();
     stopSettlementTracking();
   });
 

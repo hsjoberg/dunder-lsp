@@ -847,6 +847,41 @@ describe("/ondemand-channel/claim", () => {
     );
   });
 
+  test("opens automatically for a payment that overshot, pushing all that arrived", async () => {
+    const db = await getDb(true);
+    await createChannelRequest(db, {
+      channelId: "overshot",
+      pubkey: PUBKEY,
+      preimage: "overshot-preimage",
+      status: "REGISTERED",
+      start: 0,
+      expire: 600,
+      expectedAmountSat: 5000,
+      channelPoint: null,
+    });
+    await createHtlcSettlement(db, {
+      channelId: "overshot",
+      incomingChannelId: "1",
+      htlcId: "1",
+      amountSat: 5500,
+      settled: 1,
+      claimed: 0,
+    });
+
+    const automatic = await openChannelForSettledHtlcs({
+      db,
+      lightning: {} as any,
+      pubkey: PUBKEY,
+      source: "AUTOMATIC",
+      requestedChannelId: "overshot",
+      requiredAmountSat: 5000,
+      zeroConf: false,
+      taprootChannel: false,
+    });
+    expect(automatic.status).toBe("OPENED");
+    expect((openChannelSync as jest.Mock).mock.calls[0][3].toString()).toBe("5490");
+  });
+
   test("does not pay out a request while one of its parts awaits settlement", async () => {
     const db = await getDb(true);
     await seedUnclaimed(db, { channelId: "still-settling" });

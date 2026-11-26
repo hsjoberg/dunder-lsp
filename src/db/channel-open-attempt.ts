@@ -161,8 +161,9 @@ export async function reserveChannelOpenAttempt(
          -- any SETTLE, rows are only ever removed afterwards (when lnd failed
          -- that part), and a request with rows accepts no new parts. So a
          -- request may be paid out short: lnd failed some of its parts after
-         -- others settled. Automatic opens still require the full amount via
-         -- requiredAmountSat; claim and auto-heal pay out what arrived.
+         -- others settled. Automatic opens still require at least the full
+         -- amount via requiredAmountSat (more when a payment overshot); claim
+         -- and auto-heal pay out what arrived.
          AND NOT EXISTS (
            SELECT 1
            FROM htlcSettlement AS unsettled
@@ -223,7 +224,7 @@ export async function reserveChannelOpenAttempt(
     if (
       selected.length === 0 ||
       totalMsat.greaterThan(maximumMsat) ||
-      (requiredMsat !== undefined && !totalMsat.equals(requiredMsat))
+      (requiredMsat !== undefined && totalMsat.lessThan(requiredMsat))
     ) {
       return { status: "AMOUNT_MISMATCH", amountSat: grossAmountSat };
     }

@@ -235,12 +235,17 @@ export async function bumpForceCloseFee(
   writer.uint32((2 << 3) | 0).uint32(deadlineDelta);
   writer.uint32((4 << 3) | 0).bool(true);
   writer.uint32((5 << 3) | 0).uint64(budgetSat);
+  // A deadline, so a stuck call can't stall the deadline guard that runs it.
   await grpcMakeUnaryRequest(
     lightning,
     "/walletrpc.WalletKit/BumpForceCloseFee",
     writer.finish(),
+    undefined,
+    { deadline: Date.now() + BUMP_FORCE_CLOSE_FEE_TIMEOUT_MS },
   );
 }
+
+export const BUMP_FORCE_CLOSE_FEE_TIMEOUT_MS = 30_000;
 
 export function subscribeChannelEvents(lightning: Client) {
   const request = lnrpc.ChannelEventSubscription.encode({}).finish();

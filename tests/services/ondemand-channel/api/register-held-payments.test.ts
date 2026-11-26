@@ -173,21 +173,47 @@ describe("held multi-part payments", () => {
     expect(replay.actions).toEqual([SETTLE]);
   });
 
-  test("a part that would exceed the expected amount is failed on its own (unknown_next_peer)", async () => {
-    const { handler, htlc } = await setup();
+  test("a part that overshoots the expected amount completes the payment (as lnd does)", async () => {
+    const { db, channelId, handler, htlc } = await setup();
     const a = writer();
-    const tooMuch = writer();
     const b = writer();
 
     await handler(htlc(15_000, "31", "1"), a);
-    await handler(htlc(10_000, "32", "1"), tooMuch);
-    expect(tooMuch.actions).toEqual([RESUME]);
-    expect(a.actions).toEqual([]);
-
-    await handler(htlc(5_000, "33", "1"), b);
+    await handler(htlc(10_000, "32", "1"), b);
     await waitFor(() => a.actions.length > 0 && b.actions.length > 0);
     expect(a.actions).toEqual([SETTLE]);
     expect(b.actions).toEqual([SETTLE]);
+    const rows = await db.all("SELECT amountSat FROM htlcSettlement WHERE channelId = ?", channelId);
+    expect(rows.reduce((sum: number, row: any) => sum + row.amountSat, 0)).toBe(25_000);
+
+    // Once settling, further parts are refused (lnd: invoice already settled).
+    const late = writer();
+    await handler(htlc(5_000, "33", "1"), late);
+    expect(late.actions).toEqual([RESUME]);
+  });
+
+  test("a stranger's small part can't block the payment of an invoice they know", async () => {
+    const { handler, htlc } = await setup();
+    const stranger = writer();
+    const payer = writer();
+
+    await handler(htlc(500, "34", "1"), stranger);
+    // Before, the full payment was refused because it would overshoot.
+    await handler(htlc(20_000, "35", "1"), payer);
+    await waitFor(() => payer.actions.length > 0);
+    expect(payer.actions).toEqual([SETTLE]);
+    expect(stranger.actions).toEqual([SETTLE]);
+  });
+
+  test("a part that would take the payment past the maximum payment is refused", async () => {
+    const { handler, htlc } = await setup({ amountSat: 1_000_000 });
+    const a = writer();
+    const tooMuch = writer();
+
+    await handler(htlc(600_000, "36", "1"), a);
+    await handler(htlc(500_000, "37", "1"), tooMuch);
+    expect(tooMuch.actions).toEqual([RESUME]);
+    expect(a.actions).toEqual([]);
   });
 
   test("parts are dropped (not answered) when the interceptor stream resets", async () => {
